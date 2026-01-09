@@ -2,8 +2,10 @@
 
 use bevy::prelude::*;
 
-use super::{ButtonAction, GameUiMarker, UiMarker, button_style, NORMAL_BUTTON, HOVERED_BUTTON, PRESSED_BUTTON};
+use super::{ButtonAction, GameUiMarker, UiMarker, NORMAL_BUTTON, HOVERED_BUTTON, PRESSED_BUTTON};
 use crate::game::{ClientGame, GameEvent};
+use crate::network::NetworkEvent;
+use crate::GameState;
 
 /// 计时器显示组件
 #[derive(Component)]
@@ -358,7 +360,31 @@ pub fn handle_game_buttons(
 }
 
 /// 设置游戏结束 UI
-pub fn setup_game_over_ui(mut commands: Commands, asset_server: Res<AssetServer>) {
+pub fn setup_game_over_ui(
+    mut commands: Commands,
+    asset_server: Res<AssetServer>,
+    game: Res<ClientGame>,
+) {
+    // 根据游戏结果确定显示内容
+    let (title, title_color, subtitle) = match game.is_player_win() {
+        Some(true) => ("恭喜获胜！", Color::srgb(1.0, 0.84, 0.0), get_win_reason(&game)),
+        Some(false) => ("很遗憾，您输了", Color::srgb(0.8, 0.3, 0.3), get_win_reason(&game)),
+        None => {
+            if game.game_result.is_some() {
+                ("握手言和", Color::srgb(0.7, 0.7, 0.7), get_draw_reason(&game))
+            } else {
+                ("游戏结束", Color::WHITE, "".to_string())
+            }
+        }
+    };
+
+    // 统计信息
+    let stats = format!(
+        "总回合数：{}    总步数：{}",
+        game.total_rounds(),
+        game.total_moves()
+    );
+
     commands
         .spawn((
             Node {
@@ -369,9 +395,9 @@ pub fn setup_game_over_ui(mut commands: Commands, asset_server: Res<AssetServer>
                 align_items: AlignItems::Center,
                 ..default()
             },
-            BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.7)),
+            BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.8)),
             UiMarker,
-            GameUiMarker,
+            GameOverUiMarker,
         ))
         .with_children(|parent| {
             parent
@@ -379,66 +405,246 @@ pub fn setup_game_over_ui(mut commands: Commands, asset_server: Res<AssetServer>
                     Node {
                         flex_direction: FlexDirection::Column,
                         align_items: AlignItems::Center,
-                        padding: UiRect::all(Val::Px(40.0)),
+                        padding: UiRect::all(Val::Px(50.0)),
+                        min_width: Val::Px(400.0),
                         ..default()
                     },
-                    BackgroundColor(Color::srgb(0.2, 0.2, 0.2)),
+                    BackgroundColor(Color::srgb(0.15, 0.15, 0.15)),
+                    BorderRadius::all(Val::Px(12.0)),
                 ))
                 .with_children(|parent| {
-                    // 结果文字
+                    // 主标题
                     parent.spawn((
-                        Text::new("游戏结束"),
+                        Text::new(title),
                         TextFont {
                             font: asset_server.load("fonts/SourceHanSansSC-Bold.otf"),
                             font_size: 48.0,
                             ..default()
                         },
-                        TextColor(Color::WHITE),
+                        TextColor(title_color),
                         Node {
-                            margin: UiRect::bottom(Val::Px(30.0)),
+                            margin: UiRect::bottom(Val::Px(15.0)),
                             ..default()
                         },
                     ));
 
-                    // 返回主菜单按钮
-                    parent
-                        .spawn((
-                            Button,
-                            button_style(),
-                            BackgroundColor(NORMAL_BUTTON),
-                            ButtonAction::BackToMenu,
-                        ))
-                        .with_children(|parent| {
-                            parent.spawn((
-                                Text::new("返回主菜单"),
-                                TextFont {
-                                    font: asset_server.load("fonts/SourceHanSansSC-Regular.otf"),
-                                    font_size: 24.0,
-                                    ..default()
-                                },
-                                TextColor(Color::WHITE),
-                            ));
-                        });
+                    // 副标题（胜负原因）
+                    if !subtitle.is_empty() {
+                        parent.spawn((
+                            Text::new(subtitle),
+                            TextFont {
+                                font: asset_server.load("fonts/SourceHanSansSC-Regular.otf"),
+                                font_size: 20.0,
+                                ..default()
+                            },
+                            TextColor(Color::srgb(0.7, 0.7, 0.7)),
+                            Node {
+                                margin: UiRect::bottom(Val::Px(25.0)),
+                                ..default()
+                            },
+                        ));
+                    }
 
-                    // 再来一局按钮
+                    // 分隔线
+                    parent.spawn((
+                        Node {
+                            width: Val::Percent(80.0),
+                            height: Val::Px(1.0),
+                            margin: UiRect::vertical(Val::Px(10.0)),
+                            ..default()
+                        },
+                        BackgroundColor(Color::srgb(0.3, 0.3, 0.3)),
+                    ));
+
+                    // 统计信息
+                    parent.spawn((
+                        Text::new(stats),
+                        TextFont {
+                            font: asset_server.load("fonts/SourceHanSansSC-Regular.otf"),
+                            font_size: 18.0,
+                            ..default()
+                        },
+                        TextColor(Color::srgb(0.6, 0.6, 0.6)),
+                        Node {
+                            margin: UiRect::vertical(Val::Px(20.0)),
+                            ..default()
+                        },
+                    ));
+
+                    // 按钮容器
                     parent
-                        .spawn((
-                            Button,
-                            button_style(),
-                            BackgroundColor(NORMAL_BUTTON),
-                            ButtonAction::PlayAgain,
-                        ))
+                        .spawn(Node {
+                            flex_direction: FlexDirection::Row,
+                            justify_content: JustifyContent::Center,
+                            column_gap: Val::Px(20.0),
+                            margin: UiRect::top(Val::Px(10.0)),
+                            ..default()
+                        })
                         .with_children(|parent| {
-                            parent.spawn((
-                                Text::new("再来一局"),
-                                TextFont {
-                                    font: asset_server.load("fonts/SourceHanSansSC-Regular.otf"),
-                                    font_size: 24.0,
-                                    ..default()
-                                },
-                                TextColor(Color::WHITE),
-                            ));
+                            // 返回主菜单按钮
+                            spawn_result_button(
+                                parent,
+                                &asset_server,
+                                "返回主菜单",
+                                ButtonAction::BackToMenu,
+                                Color::srgb(0.3, 0.3, 0.3),
+                            );
+
+                            // 再来一局按钮
+                            spawn_result_button(
+                                parent,
+                                &asset_server,
+                                "再来一局",
+                                ButtonAction::PlayAgain,
+                                Color::srgb(0.2, 0.5, 0.3),
+                            );
                         });
                 });
         });
+}
+
+/// 生成结果页按钮
+fn spawn_result_button(
+    parent: &mut ChildBuilder,
+    asset_server: &AssetServer,
+    text: &str,
+    action: ButtonAction,
+    bg_color: Color,
+) {
+    parent
+        .spawn((
+            Button,
+            Node {
+                width: Val::Px(160.0),
+                height: Val::Px(50.0),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                ..default()
+            },
+            BackgroundColor(bg_color),
+            BorderRadius::all(Val::Px(8.0)),
+            action,
+        ))
+        .with_children(|parent| {
+            parent.spawn((
+                Text::new(text),
+                TextFont {
+                    font: asset_server.load("fonts/SourceHanSansSC-Regular.otf"),
+                    font_size: 20.0,
+                    ..default()
+                },
+                TextColor(Color::WHITE),
+            ));
+        });
+}
+
+/// 获取胜负原因描述
+fn get_win_reason(game: &ClientGame) -> String {
+    use protocol::{GameResult, WinReason};
+    
+    match &game.game_result {
+        Some(GameResult::RedWin(reason)) | Some(GameResult::BlackWin(reason)) => {
+            match reason {
+                WinReason::Checkmate => "将死对方".to_string(),
+                WinReason::Resign => "对方认输".to_string(),
+                WinReason::Timeout => "对方超时".to_string(),
+                WinReason::Disconnect => "对方断线".to_string(),
+            }
+        }
+        _ => "".to_string(),
+    }
+}
+
+/// 获取和棋原因描述
+fn get_draw_reason(game: &ClientGame) -> String {
+    use protocol::{DrawReason, GameResult};
+    
+    match &game.game_result {
+        Some(GameResult::Draw(reason)) => {
+            match reason {
+                DrawReason::Agreement => "双方同意和棋".to_string(),
+                DrawReason::Stalemate => "无子可动".to_string(),
+                DrawReason::Repetition => "三次重复局面".to_string(),
+                DrawReason::FiftyMoves => "五十回合无吃子".to_string(),
+            }
+        }
+        _ => "".to_string(),
+    }
+}
+
+/// 游戏结束 UI 标记
+#[derive(Component)]
+pub struct GameOverUiMarker;
+
+/// 清理游戏结束 UI
+pub fn cleanup_game_over_ui(mut commands: Commands, query: Query<Entity, With<GameOverUiMarker>>) {
+    for entity in query.iter() {
+        commands.entity(entity).despawn_recursive();
+    }
+}
+
+/// 处理游戏结束界面的按钮点击
+pub fn handle_game_over_buttons(
+    mut interaction_query: Query<
+        (&Interaction, &mut BackgroundColor, &ButtonAction),
+        (Changed<Interaction>, With<Button>),
+    >,
+    mut game_state: ResMut<NextState<GameState>>,
+    mut game: ResMut<ClientGame>,
+    mut network_events: EventWriter<NetworkEvent>,
+    conn_handle: Res<crate::network::NetworkConnectionHandle>,
+) {
+    for (interaction, mut color, action) in &mut interaction_query {
+        match *interaction {
+            Interaction::Pressed => {
+                *color = PRESSED_BUTTON.into();
+                match action {
+                    ButtonAction::BackToMenu => {
+                        tracing::info!("Back to menu clicked");
+                        // 断开网络连接
+                        conn_handle.connection.disconnect();
+                        // 重置游戏状态
+                        game.reset();
+                        // 返回主菜单
+                        game_state.set(GameState::Menu);
+                    }
+                    ButtonAction::PlayAgain => {
+                        tracing::info!("Play again clicked");
+                        // 保存之前的房间类型
+                        let room_type = game.room_type.clone();
+                        // 断开旧连接
+                        conn_handle.connection.disconnect();
+                        // 重置游戏状态
+                        game.reset();
+                        
+                        // 根据之前的房间类型重新开始
+                        if let Some(protocol::RoomType::PvE(difficulty)) = room_type {
+                            // 重新开始 PvE 游戏
+                            let initial_state = protocol::BoardState::initial();
+                            game.start_game(initial_state, protocol::Side::Red, protocol::RoomType::PvE(difficulty));
+                            game.red_time_ms = 600_000;
+                            game.black_time_ms = 600_000;
+                            game_state.set(GameState::Playing);
+                            
+                            // 重新连接服务器
+                            network_events.send(NetworkEvent::Connect {
+                                addr: "127.0.0.1:9527".to_string(),
+                                nickname: "玩家".to_string(),
+                            });
+                        } else {
+                            // PvP 模式返回主菜单
+                            game_state.set(GameState::Menu);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Interaction::Hovered => {
+                *color = HOVERED_BUTTON.into();
+            }
+            Interaction::None => {
+                *color = NORMAL_BUTTON.into();
+            }
+        }
+    }
 }

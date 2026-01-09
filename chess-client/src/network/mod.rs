@@ -1,6 +1,6 @@
 //! 网络通信模块
 //!
-//! 处理与服务器的连接和消息收发
+//! 使用全局共享的 tokio Runtime 处理异步网络操作
 
 mod connection;
 
@@ -17,8 +17,14 @@ pub struct NetworkPlugin;
 
 impl Plugin for NetworkPlugin {
     fn build(&self, app: &mut App) {
+        // 创建全局共享的 tokio runtime
+        let runtime = TokioRuntime::new();
+        let runtime_handle = runtime.handle();
+        
         app.insert_resource(NetworkState::default())
             .insert_resource(NetworkConnectionHandle::default())
+            .insert_resource(TokioRuntimeHandle(runtime_handle))
+            .insert_non_send_resource(runtime) // Runtime 本身不需要 Send
             .add_event::<NetworkEvent>()
             .add_event::<ServerMessageEvent>()
             .add_systems(
@@ -31,6 +37,10 @@ impl Plugin for NetworkPlugin {
             );
     }
 }
+
+/// Tokio Runtime Handle（可跨线程共享）
+#[derive(Resource, Clone)]
+pub struct TokioRuntimeHandle(pub tokio::runtime::Handle);
 
 /// 网络连接句柄（Bevy 资源）
 #[derive(Resource, Default, Clone)]
@@ -119,6 +129,7 @@ fn handle_network_events(
     mut events: EventReader<NetworkEvent>,
     mut network: ResMut<NetworkState>,
     conn_handle: Res<NetworkConnectionHandle>,
+    runtime_handle: Res<TokioRuntimeHandle>,
     mut game_state: ResMut<NextState<GameState>>,
 ) {
     for event in events.read() {
@@ -131,37 +142,18 @@ fn handle_network_events(
                 
                 tracing::info!("Connecting to {} as {}", addr, nickname);
                 
-                // 异步连接服务器
-                let connection = conn_handle.connection.clone();
-                let addr_clone = addr.clone();
-                let nickname_clone = nickname.clone();
-                
-                std::thread::spawn(move || {
-                    let rt = tokio::runtime::Runtime::new().unwrap();
-                    rt.block_on(async {
-                        if connection.connect(&addr_clone).await.is_ok() {
-                            // 连接成功后发送登录消息
-                            // connect() 内部已经启动了独立的读写任务
-                            connection.queue_send(ClientMessage::Login { nickname: nickname_clone });
-                        } else {
-                            tracing::error!("Failed to connect to {}", addr_clone);
-                        }
-                    });
-                });
+                // 使用共享的 runtime handle 启动连接
+                conn_handle.connection.connect_with_handle(
+                    addr.clone(),
+                    nickname.clone(),
+                    runtime_handle.0.clone(),
+                );
             }
             NetworkEvent::Disconnect => {
                 network.status = ConnectionStatus::Disconnected;
                 network.player_id = None;
                 network.room_id = None;
-                
-                let connection = conn_handle.connection.clone();
-                std::thread::spawn(move || {
-                    let rt = tokio::runtime::Runtime::new().unwrap();
-                    rt.block_on(async {
-                        let _ = connection.disconnect().await;
-                    });
-                });
-                
+                conn_handle.connection.disconnect();
                 game_state.set(GameState::Menu);
             }
             NetworkEvent::CreateRoom { room_type, preferred_side } => {
@@ -285,6 +277,7 @@ fn handle_server_messages(
                 game.undo(new_state.clone(), 1);
             }
             ServerMessage::GameOver { result } => {
+                game.set_result(result.clone());
                 game_state.set(GameState::GameOver);
                 tracing::info!("Game over: {:?}", result);
             }

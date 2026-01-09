@@ -31,7 +31,9 @@ impl Plugin for UiPlugin {
                     .run_if(in_state(GameState::Playing)),
             )
             // 游戏结束
-            .add_systems(OnEnter(GameState::GameOver), setup_game_over_ui);
+            .add_systems(OnEnter(GameState::GameOver), setup_game_over_ui)
+            .add_systems(OnExit(GameState::GameOver), cleanup_game_over_ui)
+            .add_systems(Update, handle_game_over_buttons.run_if(in_state(GameState::GameOver)));
     }
 }
 

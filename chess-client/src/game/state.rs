@@ -1,7 +1,7 @@
 //! 客户端游戏状态
 
 use bevy::prelude::*;
-use protocol::{BoardState, MoveGenerator, Position, RoomType, Side};
+use protocol::{BoardState, GameResult, MoveGenerator, Position, RoomType, Side};
 
 /// 客户端游戏状态
 #[derive(Resource, Default)]
@@ -28,6 +28,8 @@ pub struct ClientGame {
     pub is_paused: bool,
     /// 是否在等待对方响应悔棋
     pub waiting_undo_response: bool,
+    /// 游戏结果
+    pub game_result: Option<GameResult>,
 }
 
 /// 走法记录
@@ -55,6 +57,7 @@ impl ClientGame {
         self.move_history.clear();
         self.is_paused = false;
         self.waiting_undo_response = false;
+        self.game_result = None;
     }
 
     /// 是否轮到玩家走棋
@@ -167,5 +170,32 @@ impl ClientGame {
             Some(Side::Black) => self.red_time_ms,
             None => 0,
         }
+    }
+
+    /// 设置游戏结果
+    pub fn set_result(&mut self, result: GameResult) {
+        self.game_result = Some(result);
+    }
+
+    /// 判断玩家是否获胜
+    pub fn is_player_win(&self) -> Option<bool> {
+        match (&self.game_result, self.player_side) {
+            (Some(GameResult::RedWin(_)), Some(Side::Red)) => Some(true),
+            (Some(GameResult::BlackWin(_)), Some(Side::Black)) => Some(true),
+            (Some(GameResult::RedWin(_)), Some(Side::Black)) => Some(false),
+            (Some(GameResult::BlackWin(_)), Some(Side::Red)) => Some(false),
+            (Some(GameResult::Draw(_)), _) => None, // 和棋返回 None
+            _ => None,
+        }
+    }
+
+    /// 获取总步数
+    pub fn total_moves(&self) -> usize {
+        self.move_history.len()
+    }
+
+    /// 获取回合数
+    pub fn total_rounds(&self) -> usize {
+        (self.move_history.len() + 1) / 2
     }
 }
