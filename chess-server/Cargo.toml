@@ -1,0 +1,17 @@
+[package]
+name = "chess-server"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+protocol = { workspace = true }
+chess-ai = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+chrono = { workspace = true }
+rand = { workspace = true }

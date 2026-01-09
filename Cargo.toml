@@ -1,0 +1,48 @@
+[workspace]
+resolver = "2"
+members = [
+    "protocol",
+    "chess-server",
+    "chess-client",
+    "chess-ai",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[workspace.dependencies]
+# 异步运行时
+tokio = { version = "1", features = ["full"] }
+
+# 序列化
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+bincode = "1"  # 保持与阶段1兼容
+
+# 错误处理
+anyhow = "1"
+thiserror = "2"
+
+# 日志
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# 游戏引擎 (客户端)
+bevy = "0.15"
+
+# 异步 trait
+async-trait = "0.1"
+
+# 时间处理
+chrono = { version = "0.4", features = ["serde"] }
+
+# 随机数
+rand = "0.8"
+
+# 共享协议
+protocol = { path = "protocol" }
+
+# AI 引擎
+chess-ai = { path = "chess-ai" }
