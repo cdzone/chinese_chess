@@ -335,9 +335,9 @@ impl AiEngine {
             alpha = stand_pat;
         }
 
-        // 只搜索吃子走法
+        // 只搜索吃子走法（通过检查目标位置是否有棋子来判断）
         let moves = MoveGenerator::generate_legal(state);
-        let captures: Vec<_> = moves.into_iter().filter(|m| m.captured.is_some()).collect();
+        let captures: Vec<_> = moves.into_iter().filter(|m| state.board.get(m.to).is_some()).collect();
 
         for mv in captures {
             let mut new_state = state.clone();

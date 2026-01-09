@@ -585,6 +585,11 @@ impl MessageHandler {
             return;
         }
 
+        // 重置计时器起点（AI 思考时间不应计入玩家时间）
+        if let Some(timer) = &mut room.timer {
+            timer.reset_turn_start();
+        }
+
         // 生成中文记谱
         let new_state = match room.game_state.clone() {
             Some(s) => s,
