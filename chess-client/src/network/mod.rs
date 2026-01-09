@@ -141,15 +141,8 @@ fn handle_network_events(
                     rt.block_on(async {
                         if connection.connect(&addr_clone).await.is_ok() {
                             // 连接成功后发送登录消息
+                            // connect() 内部已经启动了独立的读写任务
                             connection.queue_send(ClientMessage::Login { nickname: nickname_clone });
-                            // 启动轮询任务
-                            loop {
-                                if let Err(e) = connection.poll().await {
-                                    tracing::error!("Network poll error: {}", e);
-                                    break;
-                                }
-                                tokio::time::sleep(std::time::Duration::from_millis(16)).await;
-                            }
                         } else {
                             tracing::error!("Failed to connect to {}", addr_clone);
                         }

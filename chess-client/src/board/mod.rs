@@ -22,7 +22,12 @@ impl Plugin for BoardPlugin {
             .add_systems(OnExit(GameState::Playing), cleanup_board)
             .add_systems(
                 Update,
-                (update_pieces, update_highlights).run_if(in_state(GameState::Playing)),
+                (
+                    update_board_on_layout_change,
+                    update_pieces,
+                    update_highlights,
+                )
+                    .run_if(in_state(GameState::Playing)),
             );
     }
 }
@@ -132,6 +137,71 @@ fn cleanup_board(mut commands: Commands, query: Query<Entity, With<BoardMarker>>
     }
 }
 
+/// 当布局变化时重新渲染棋盘
+fn update_board_on_layout_change(
+    mut commands: Commands,
+    layout: Res<BoardLayout>,
+    theme: Res<crate::theme::ColorTheme>,
+    game: Res<crate::game::ClientGame>,
+    board_query: Query<Entity, With<BoardMarker>>,
+    asset_server: Res<AssetServer>,
+) {
+    if !layout.is_changed() {
+        return;
+    }
+
+    // 清除所有棋盘相关实体
+    for entity in board_query.iter() {
+        commands.entity(entity).despawn_recursive();
+    }
+
+    // 重新生成棋盘
+    render::spawn_board(&mut commands, &layout, &theme);
+
+    // 重新生成棋子
+    if let Some(state) = &game.game_state {
+        pieces::spawn_pieces(&mut commands, &state.board, &layout, &theme, &asset_server);
+    }
+
+    // 重新生成高亮
+    if let Some(pos) = game.selected_piece {
+        render::spawn_highlight(
+            &mut commands,
+            &layout,
+            pos,
+            theme.selected_highlight,
+            HighlightType::Selected,
+        );
+    }
+
+    for &pos in &game.valid_moves {
+        render::spawn_highlight(
+            &mut commands,
+            &layout,
+            pos,
+            theme.valid_move_indicator,
+            HighlightType::ValidMove,
+        );
+    }
+
+    if let Some((from, to)) = game.last_move {
+        render::spawn_highlight(
+            &mut commands,
+            &layout,
+            from,
+            theme.last_move_highlight,
+            HighlightType::LastMove,
+        );
+        render::spawn_highlight(
+            &mut commands,
+            &layout,
+            to,
+            theme.last_move_highlight,
+            HighlightType::LastMove,
+        );
+    }
+}
+
 /// 更新棋子显示
 fn update_pieces(
     mut commands: Commands,
@@ -141,6 +211,11 @@ fn update_pieces(
     pieces_query: Query<Entity, With<PieceMarker>>,
     asset_server: Res<AssetServer>,
 ) {
+    // 布局变化时由 update_board_on_layout_change 处理
+    if layout.is_changed() {
+        return;
+    }
+    
     if !game.is_changed() {
         return;
     }
@@ -164,6 +239,11 @@ fn update_highlights(
     theme: Res<crate::theme::ColorTheme>,
     highlights_query: Query<Entity, With<HighlightMarker>>,
 ) {
+    // 布局变化时由 update_board_on_layout_change 处理
+    if layout.is_changed() {
+        return;
+    }
+    
     if !game.is_changed() {
         return;
     }
