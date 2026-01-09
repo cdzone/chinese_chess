@@ -1,6 +1,6 @@
 //! 网络通信模块
 //!
-//! 使用全局共享的 tokio Runtime 处理异步网络操作
+//! 使用全局静态 tokio Runtime 处理异步网络操作
 
 mod connection;
 
@@ -17,14 +17,8 @@ pub struct NetworkPlugin;
 
 impl Plugin for NetworkPlugin {
     fn build(&self, app: &mut App) {
-        // 创建全局共享的 tokio runtime
-        let runtime = TokioRuntime::new();
-        let runtime_handle = runtime.handle();
-        
         app.insert_resource(NetworkState::default())
             .insert_resource(NetworkConnectionHandle::default())
-            .insert_resource(TokioRuntimeHandle(runtime_handle))
-            .insert_non_send_resource(runtime) // Runtime 本身不需要 Send
             .add_event::<NetworkEvent>()
             .add_event::<ServerMessageEvent>()
             .add_systems(
@@ -37,10 +31,6 @@ impl Plugin for NetworkPlugin {
             );
     }
 }
-
-/// Tokio Runtime Handle（可跨线程共享）
-#[derive(Resource, Clone)]
-pub struct TokioRuntimeHandle(pub tokio::runtime::Handle);
 
 /// 网络连接句柄（Bevy 资源）
 #[derive(Resource, Default, Clone)]
@@ -75,6 +65,8 @@ pub struct NetworkState {
     pub nickname: String,
     /// 登录成功后待执行的操作
     pub pending_action: PendingAction,
+    /// 当前房间类型（用于再来一局）
+    pub current_room_type: Option<protocol::RoomType>,
 }
 
 /// 连接状态
@@ -129,7 +121,6 @@ fn handle_network_events(
     mut events: EventReader<NetworkEvent>,
     mut network: ResMut<NetworkState>,
     conn_handle: Res<NetworkConnectionHandle>,
-    runtime_handle: Res<TokioRuntimeHandle>,
     mut game_state: ResMut<NextState<GameState>>,
 ) {
     for event in events.read() {
@@ -142,12 +133,8 @@ fn handle_network_events(
                 
                 tracing::info!("Connecting to {} as {}", addr, nickname);
                 
-                // 使用共享的 runtime handle 启动连接
-                conn_handle.connection.connect_with_handle(
-                    addr.clone(),
-                    nickname.clone(),
-                    runtime_handle.0.clone(),
-                );
+                // 使用全局 Runtime 连接
+                conn_handle.connection.connect(addr.clone(), nickname.clone());
             }
             NetworkEvent::Disconnect => {
                 network.status = ConnectionStatus::Disconnected;
@@ -157,6 +144,9 @@ fn handle_network_events(
                 game_state.set(GameState::Menu);
             }
             NetworkEvent::CreateRoom { room_type, preferred_side } => {
+                // 保存房间类型
+                network.current_room_type = Some(room_type.clone());
+                
                 let msg = ClientMessage::CreateRoom {
                     room_type: room_type.clone(),
                     preferred_side: *preferred_side,
@@ -236,6 +226,9 @@ fn handle_server_messages(
                         game_state.set(GameState::Lobby);
                     }
                     PendingAction::CreateRoom { room_type, preferred_side } => {
+                        // 保存房间类型
+                        network.current_room_type = Some(room_type.clone());
+                        
                         let msg = ClientMessage::CreateRoom {
                             room_type,
                             preferred_side,
@@ -260,8 +253,8 @@ fn handle_server_messages(
                 tracing::info!("Joined room {:?} as {:?}", room_id, side);
             }
             ServerMessage::GameStarted { initial_state, your_side, .. } => {
-                // 从网络状态获取房间类型，默认 PvP
-                let room_type = protocol::RoomType::PvP;
+                // 使用保存的房间类型
+                let room_type = network.current_room_type.clone().unwrap_or(protocol::RoomType::PvP);
                 game.start_game(initial_state.clone(), *your_side, room_type);
                 game_state.set(GameState::Playing);
                 tracing::info!("Game started!");
@@ -273,8 +266,9 @@ fn handle_server_messages(
                 game.update_time(*red_time_ms, *black_time_ms);
             }
             ServerMessage::UndoApproved { new_state } => {
-                // 默认悔棋 1 步
-                game.undo(new_state.clone(), 1);
+                // PvE 模式悔棋 2 步（玩家+AI），PvP 模式悔棋 1 步
+                let steps = if game.is_pve() { 2 } else { 1 };
+                game.undo(new_state.clone(), steps);
             }
             ServerMessage::GameOver { result } => {
                 game.set_result(result.clone());

@@ -1,40 +1,37 @@
 //! 网络连接管理
 //!
-//! 使用全局共享的 tokio Runtime，避免频繁创建销毁
+//! 使用全局静态 tokio Runtime，正确管理任务生命周期
 
 use std::sync::{Arc, Mutex as StdMutex};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 use tokio::sync::mpsc;
-use tokio::runtime::Runtime;
+use tokio::task::JoinHandle;
 use protocol::{ClientMessage, ServerMessage, TcpConnector, Connector};
 
-/// 全局 Tokio Runtime 包装器
-pub struct TokioRuntime {
-    runtime: Runtime,
+/// 连接超时时间
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+
+// 全局静态 Tokio Runtime
+// 使用 lazy_static 确保 Runtime 在整个程序生命周期内存活
+lazy_static::lazy_static! {
+    static ref RUNTIME: tokio::runtime::Runtime = {
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .expect("Failed to create tokio runtime")
+    };
 }
 
-impl TokioRuntime {
-    /// 创建新的 Runtime
-    pub fn new() -> Self {
-        let runtime = Runtime::new().expect("Failed to create tokio runtime");
-        Self { runtime }
-    }
-
-    /// 获取 runtime handle
-    pub fn handle(&self) -> tokio::runtime::Handle {
-        self.runtime.handle().clone()
-    }
-}
-
-impl Default for TokioRuntime {
-    fn default() -> Self {
-        Self::new()
-    }
+/// 获取全局 Runtime 的 Handle
+pub fn runtime_handle() -> tokio::runtime::Handle {
+    RUNTIME.handle().clone()
 }
 
 /// 网络连接包装器
 /// 
-/// 使用共享的 Runtime 运行异步任务
+/// 正确管理任务生命周期，支持取消和资源清理
 pub struct NetworkConnection {
     /// 发送通道
     send_tx: Arc<StdMutex<Option<mpsc::UnboundedSender<ClientMessage>>>>,
@@ -42,6 +39,8 @@ pub struct NetworkConnection {
     recv_queue: Arc<StdMutex<Vec<ServerMessage>>>,
     /// 是否正在运行
     running: Arc<AtomicBool>,
+    /// 主连接任务句柄（用于取消）
+    task_handle: Arc<StdMutex<Option<JoinHandle<()>>>>,
 }
 
 impl NetworkConnection {
@@ -51,33 +50,68 @@ impl NetworkConnection {
             send_tx: Arc::new(StdMutex::new(None)),
             recv_queue: Arc::new(StdMutex::new(Vec::new())),
             running: Arc::new(AtomicBool::new(false)),
+            task_handle: Arc::new(StdMutex::new(None)),
         }
     }
 
-    /// 使用指定的 runtime handle 连接到服务器
-    pub fn connect_with_handle(
-        &self,
-        addr: String,
-        nickname: String,
-        handle: tokio::runtime::Handle,
-    ) {
+    /// 连接到服务器
+    /// 
+    /// 如果已有连接，会先取消旧连接
+    pub fn connect(&self, addr: String, nickname: String) {
+        // 先取消旧任务
+        self.abort_task();
+        
+        // 清理旧状态
+        if let Ok(mut tx) = self.send_tx.lock() {
+            *tx = None;
+        }
+        if let Ok(mut queue) = self.recv_queue.lock() {
+            queue.clear();
+        }
+        
         let send_tx = self.send_tx.clone();
         let recv_queue = self.recv_queue.clone();
         let running = self.running.clone();
 
-        // 在共享的 runtime 上 spawn 连接任务
-        handle.spawn(async move {
+        // 在全局 Runtime 上 spawn 连接任务
+        let handle = RUNTIME.spawn(async move {
             if let Err(e) = connect_task(addr, nickname, send_tx, recv_queue, running).await {
                 tracing::error!("Connection task error: {}", e);
             }
         });
+        
+        // 保存任务句柄
+        if let Ok(mut task) = self.task_handle.lock() {
+            *task = Some(handle);
+        }
     }
 
-    /// 断开连接
+    /// 断开连接并清理资源
     pub fn disconnect(&self) {
+        // 设置停止标志
         self.running.store(false, Ordering::SeqCst);
+        
+        // 关闭发送通道（会导致写任务退出）
         if let Ok(mut tx) = self.send_tx.lock() {
-            *tx = None; // 关闭发送通道
+            *tx = None;
+        }
+        
+        // 取消任务
+        self.abort_task();
+        
+        // 清理接收队列
+        if let Ok(mut queue) = self.recv_queue.lock() {
+            queue.clear();
+        }
+    }
+
+    /// 取消当前任务
+    fn abort_task(&self) {
+        if let Ok(mut handle) = self.task_handle.lock() {
+            if let Some(task) = handle.take() {
+                task.abort();
+                tracing::debug!("Aborted previous connection task");
+            }
         }
     }
 
@@ -88,6 +122,8 @@ impl NetworkConnection {
                 if let Err(e) = sender.send(msg) {
                     tracing::error!("Failed to queue message: {}", e);
                 }
+            } else {
+                tracing::warn!("Cannot send message: not connected");
             }
         }
     }
@@ -105,11 +141,27 @@ impl NetworkConnection {
     pub fn is_running(&self) -> bool {
         self.running.load(Ordering::SeqCst)
     }
+    
+    /// 检查是否已连接
+    pub fn is_connected(&self) -> bool {
+        if let Ok(tx) = self.send_tx.lock() {
+            tx.is_some() && self.running.load(Ordering::SeqCst)
+        } else {
+            false
+        }
+    }
 }
 
 impl Default for NetworkConnection {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl Drop for NetworkConnection {
+    fn drop(&mut self) {
+        // 确保资源被清理
+        self.disconnect();
     }
 }
 
@@ -121,8 +173,19 @@ async fn connect_task(
     recv_queue: Arc<StdMutex<Vec<ServerMessage>>>,
     running: Arc<AtomicBool>,
 ) -> anyhow::Result<()> {
+    // 带超时的连接
     let connector = TcpConnector;
-    let conn = connector.connect(&addr).await?;
+    let conn = match tokio::time::timeout(CONNECT_TIMEOUT, connector.connect(&addr)).await {
+        Ok(Ok(conn)) => conn,
+        Ok(Err(e)) => {
+            tracing::error!("Failed to connect to {}: {}", addr, e);
+            return Err(e.into());
+        }
+        Err(_) => {
+            tracing::error!("Connection to {} timed out", addr);
+            return Err(anyhow::anyhow!("Connection timeout"));
+        }
+    };
     
     tracing::info!("Connected to server: {}", addr);
     
@@ -153,12 +216,16 @@ async fn connect_task(
     tokio::select! {
         result = write_handle => {
             if let Err(e) = result {
-                tracing::error!("Write task panicked: {}", e);
+                if !e.is_cancelled() {
+                    tracing::error!("Write task panicked: {}", e);
+                }
             }
         }
         result = read_handle => {
             if let Err(e) = result {
-                tracing::error!("Read task panicked: {}", e);
+                if !e.is_cancelled() {
+                    tracing::error!("Read task panicked: {}", e);
+                }
             }
         }
     }
@@ -178,7 +245,7 @@ async fn write_task(
     while running.load(Ordering::SeqCst) {
         match rx.recv().await {
             Some(msg) => {
-                tracing::debug!("Sending: {:?}", msg);
+                tracing::trace!("Sending: {:?}", msg);
                 if let Err(e) = writer.send(&msg).await {
                     tracing::error!("Failed to send message: {}", e);
                     running.store(false, Ordering::SeqCst);
@@ -191,7 +258,7 @@ async fn write_task(
             }
         }
     }
-    tracing::info!("Write task ended");
+    tracing::debug!("Write task ended");
 }
 
 /// 读任务：从服务器接收消息并放入队列
@@ -203,17 +270,19 @@ async fn read_task(
     while running.load(Ordering::SeqCst) {
         match reader.recv::<ServerMessage>().await {
             Ok(msg) => {
-                tracing::debug!("Received: {:?}", msg);
+                tracing::trace!("Received: {:?}", msg);
                 if let Ok(mut queue) = recv_queue.lock() {
                     queue.push(msg);
                 }
             }
             Err(e) => {
-                tracing::warn!("Receive error: {}", e);
+                if running.load(Ordering::SeqCst) {
+                    tracing::warn!("Receive error: {}", e);
+                }
                 running.store(false, Ordering::SeqCst);
                 break;
             }
         }
     }
-    tracing::info!("Read task ended");
+    tracing::debug!("Read task ended");
 }

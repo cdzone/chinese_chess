@@ -11,6 +11,9 @@ use protocol::{
 
 use crate::game::GameTimer;
 
+/// 房间状态版本号（用于检测 race condition）
+static ROOM_VERSION_COUNTER: AtomicU64 = AtomicU64::new(0);
+
 /// 房间
 pub struct Room {
     pub id: RoomId,
@@ -32,6 +35,8 @@ pub struct Room {
     pub created_at: Instant,
     /// 悔棋请求方（如果有）
     pub undo_requested_by: Option<Side>,
+    /// 状态版本号（每次状态变更时递增）
+    pub version: u64,
 }
 
 impl Room {
@@ -49,7 +54,13 @@ impl Room {
             no_capture_history: Vec::new(),
             created_at: Instant::now(),
             undo_requested_by: None,
+            version: ROOM_VERSION_COUNTER.fetch_add(1, Ordering::SeqCst),
         }
+    }
+
+    /// 递增版本号
+    pub fn bump_version(&mut self) {
+        self.version = ROOM_VERSION_COUNTER.fetch_add(1, Ordering::SeqCst);
     }
 
     /// 获取房间信息（用于列表展示）
@@ -226,6 +237,9 @@ impl Room {
 
         // 清除悔棋请求
         self.undo_requested_by = None;
+
+        // 递增版本号
+        self.bump_version();
 
         Ok(())
     }

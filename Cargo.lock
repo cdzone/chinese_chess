@@ -1522,6 +1522,7 @@ dependencies = [
  "anyhow",
  "bevy",
  "chrono",
+ "lazy_static",
  "protocol",
  "serde",
  "serde_json",

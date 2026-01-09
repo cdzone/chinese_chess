@@ -534,45 +534,59 @@ impl MessageHandler {
             return None;
         }
 
-        // PvE 模式：AI 自动走棋
+        // PvE 模式：AI 自动走棋（在独立线程中执行，不阻塞其他异步任务）
         if let Some(difficulty) = pve_difficulty {
-            Self::make_ai_move(state, pending, room_id, difficulty);
+            // 获取当前状态版本和游戏状态
+            let room = state.rooms.get(room_id)?;
+            let version_before = room.version;
+            let game_state_for_ai = room.game_state.clone()?;
+            
+            // 在阻塞线程池中运行 AI 计算
+            // 使用 block_in_place 允许 tokio 在等待期间处理其他任务
+            let ai_result = tokio::task::block_in_place(|| {
+                let mut engine = AiEngine::from_difficulty(difficulty);
+                engine.search(&game_state_for_ai)
+            });
+            
+            // 处理 AI 结果
+            match ai_result {
+                Some(ai_move) => {
+                    Self::apply_ai_move(state, pending, room_id, ai_move, version_before);
+                }
+                None => {
+                    // AI 无法走棋，判定 AI 负
+                    tracing::warn!("AI 无法找到合法走法，判定 AI 负");
+                    Self::ai_loses(state, pending, room_id);
+                }
+            }
         }
 
         None
     }
 
-    /// AI 走棋
-    fn make_ai_move(
+    /// 应用 AI 走法（带版本检查）
+    fn apply_ai_move(
         state: &mut ServerState,
         pending: &mut PendingMessages,
         room_id: RoomId,
-        difficulty: protocol::Difficulty,
+        ai_move: Move,
+        version_before: u64,
     ) {
         let room = match state.rooms.get(room_id) {
             Some(r) => r,
             None => return,
         };
 
+        // 检查版本号，确保状态未改变
+        if room.version != version_before {
+            tracing::warn!("AI 计算期间游戏状态已改变，丢弃 AI 走法");
+            return;
+        }
+
         // 检查游戏状态
         if room.state != RoomState::Playing {
             return;
         }
-
-        let game_state = match room.game_state.as_ref() {
-            Some(s) => s.clone(),
-            None => return,
-        };
-
-        // 创建 AI 引擎并搜索最佳走法
-        let mut engine = AiEngine::from_difficulty(difficulty);
-        let ai_move = match engine.search(&game_state) {
-            Some(mv) => mv,
-            None => {
-                // AI 无法走棋，可能被将死
-                return;
-            }
-        };
 
         // 执行 AI 走棋
         let room = match state.rooms.get_mut(room_id) {
@@ -581,7 +595,11 @@ impl MessageHandler {
         };
 
         if room.make_move(ai_move).is_err() {
-            tracing::error!("AI 走棋失败: {:?}", ai_move);
+            tracing::error!("AI 走棋失败: {:?}，判定 AI 负", ai_move);
+            // AI 走棋失败，判定 AI 负
+            let result = GameResult::RedWin(WinReason::Resign);
+            room.finish(result.clone());
+            pending.broadcast(room_id, ServerMessage::GameOver { result });
             return;
         }
 
@@ -630,6 +648,27 @@ impl MessageHandler {
             room.finish(result.clone());
             pending.broadcast(room_id, ServerMessage::GameOver { result });
         }
+    }
+
+    /// AI 失败，判定 AI 负（玩家胜）
+    fn ai_loses(
+        state: &mut ServerState,
+        pending: &mut PendingMessages,
+        room_id: RoomId,
+    ) {
+        let room = match state.rooms.get_mut(room_id) {
+            Some(r) => r,
+            None => return,
+        };
+
+        if room.state != RoomState::Playing {
+            return;
+        }
+
+        // 玩家是红方，AI 是黑方，所以红方胜
+        let result = GameResult::RedWin(WinReason::Resign);
+        room.finish(result.clone());
+        pending.broadcast(room_id, ServerMessage::GameOver { result });
     }
 
     /// 处理悔棋请求
