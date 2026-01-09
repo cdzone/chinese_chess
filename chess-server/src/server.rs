@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 
 use tokio::sync::mpsc;
 
+use chess_ai::AiEngine;
 use protocol::{
     ClientMessage, ErrorCode, GameResult, Move, Notation, PlayerId,
     Position, RoomId, RoomInfo, RoomState, RoomType, ServerMessage, Side, WinReason,
@@ -480,6 +481,12 @@ impl MessageHandler {
             });
         }
 
+        // 获取 PvE 难度（如果是 PvE 模式）
+        let pve_difficulty = match room.room_type {
+            RoomType::PvE(difficulty) => Some(difficulty),
+            _ => None,
+        };
+
         // 执行走棋
         let room = state.rooms.get_mut(room_id)?;
         let mv = Move::new(from, to);
@@ -524,9 +531,100 @@ impl MessageHandler {
             let room = state.rooms.get_mut(room_id)?;
             room.finish(result.clone());
             pending.broadcast(room_id, ServerMessage::GameOver { result });
+            return None;
+        }
+
+        // PvE 模式：AI 自动走棋
+        if let Some(difficulty) = pve_difficulty {
+            Self::make_ai_move(state, pending, room_id, difficulty);
         }
 
         None
+    }
+
+    /// AI 走棋
+    fn make_ai_move(
+        state: &mut ServerState,
+        pending: &mut PendingMessages,
+        room_id: RoomId,
+        difficulty: protocol::Difficulty,
+    ) {
+        let room = match state.rooms.get(room_id) {
+            Some(r) => r,
+            None => return,
+        };
+
+        // 检查游戏状态
+        if room.state != RoomState::Playing {
+            return;
+        }
+
+        let game_state = match room.game_state.as_ref() {
+            Some(s) => s.clone(),
+            None => return,
+        };
+
+        // 创建 AI 引擎并搜索最佳走法
+        let mut engine = AiEngine::from_difficulty(difficulty);
+        let ai_move = match engine.search(&game_state) {
+            Some(mv) => mv,
+            None => {
+                // AI 无法走棋，可能被将死
+                return;
+            }
+        };
+
+        // 执行 AI 走棋
+        let room = match state.rooms.get_mut(room_id) {
+            Some(r) => r,
+            None => return,
+        };
+
+        if room.make_move(ai_move).is_err() {
+            tracing::error!("AI 走棋失败: {:?}", ai_move);
+            return;
+        }
+
+        // 生成中文记谱
+        let new_state = match room.game_state.clone() {
+            Some(s) => s,
+            None => return,
+        };
+        let notation = Notation::to_chinese(&new_state.board, &ai_move).unwrap_or_default();
+
+        // 获取时间信息
+        let (red_time_ms, black_time_ms) = if let Some(timer) = &room.timer {
+            (timer.red_time_ms(), timer.black_time_ms())
+        } else {
+            (0, 0)
+        };
+
+        // 检查游戏是否结束
+        let game_over = room.check_game_over();
+
+        // 广播 AI 走棋消息
+        pending.broadcast(room_id, ServerMessage::MoveMade {
+            from: ai_move.from,
+            to: ai_move.to,
+            new_state,
+            notation,
+        });
+
+        // 发送时间更新
+        pending.broadcast(room_id, ServerMessage::TimeUpdate {
+            red_time_ms,
+            black_time_ms,
+        });
+
+        // 处理游戏结束
+        if let Some(result) = game_over {
+            let room = match state.rooms.get_mut(room_id) {
+                Some(r) => r,
+                None => return,
+            };
+            room.finish(result.clone());
+            pending.broadcast(room_id, ServerMessage::GameOver { result });
+        }
     }
 
     /// 处理悔棋请求

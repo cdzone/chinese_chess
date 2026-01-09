@@ -16,7 +16,7 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 chrono = { workspace = true }
 rand = { workspace = true }
-dirs = "5.0"
+dirs = "6.0"
 
 [dev-dependencies]
 tempfile = "3.0"
