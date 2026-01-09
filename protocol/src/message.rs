@@ -207,7 +207,11 @@ pub enum ServerMessage {
     /// 棋局保存成功
     GameSaved { game_id: String },
     /// 棋局加载成功
-    GameLoaded { state: BoardState },
+    GameLoaded { 
+        room_id: RoomId,
+        game_state: BoardState,
+        your_side: Side,
+    },
 
     // === 心跳 ===
     /// 心跳响应

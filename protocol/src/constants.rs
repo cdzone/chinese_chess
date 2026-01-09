@@ -35,6 +35,9 @@ pub const RECONNECT_TIMEOUT_SECS: u64 = 60;
 /// 每方初始时间（毫秒）- 10分钟
 pub const INITIAL_TIME_MS: u64 = 10 * 60 * 1000;
 
+/// AI 玩家 ID（使用最大值避免与真实玩家 ID 冲突）
+pub const AI_PLAYER_ID: u64 = u64::MAX;
+
 /// 心跳间隔 Duration
 pub const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(HEARTBEAT_INTERVAL_SECS);
 

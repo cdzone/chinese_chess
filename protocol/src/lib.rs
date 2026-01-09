@@ -23,11 +23,14 @@ pub use board::{Board, BoardState};
 pub use constants::*;
 pub use error::{ChessError, ProtocolError, Result};
 pub use fen::Fen;
-pub use message::{ClientMessage, ServerMessage, ErrorCode, RoomInfo, RoomType, GameResult, Difficulty};
+pub use message::{
+    ClientMessage, ServerMessage, ErrorCode, RoomInfo, RoomType, RoomState,
+    GameResult, WinReason, DrawReason, Difficulty, PlayerId, RoomId,
+};
 pub use moves::{Move, MoveGenerator};
 pub use notation::Notation;
 pub use piece::{Piece, PieceType, Side, Position};
-pub use record::{GameRecord, MoveRecord, GameMetadata};
+pub use record::{GameRecord, MoveRecord, GameMetadata, SaveInfo};
 pub use transport::{
     Connection, Connector, Listener, 
     TcpConnection, TcpConnector, TcpListener,

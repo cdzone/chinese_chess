@@ -24,6 +24,9 @@ pub struct GameMetadata {
     pub result: Option<GameResult>,
     /// 时间控制（如 "10+0" 表示每方10分钟，无加秒）
     pub time_control: Option<String>,
+    /// AI 难度（PvE 模式）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ai_difficulty: Option<String>,
 }
 
 /// 走法记录
@@ -117,11 +120,17 @@ impl GameRecord {
                 date: Utc::now().format("%Y-%m-%d").to_string(),
                 result: None,
                 time_control: Some("10+0".to_string()),
+                ai_difficulty: None,
             },
             initial_fen: crate::fen::INITIAL_FEN.to_string(),
             moves: Vec::new(),
             save_info: None,
         }
+    }
+
+    /// 设置 AI 难度
+    pub fn set_ai_difficulty(&mut self, difficulty: &str) {
+        self.metadata.ai_difficulty = Some(difficulty.to_string());
     }
 
     /// 从自定义 FEN 创建
