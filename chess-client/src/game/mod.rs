@@ -60,6 +60,7 @@ fn handle_game_events(
     mut events: EventReader<GameEvent>,
     mut game: ResMut<ClientGame>,
     mut network_events: EventWriter<crate::network::NetworkEvent>,
+    mut game_state: ResMut<NextState<GameState>>,
 ) {
     for event in events.read() {
         match event {
@@ -102,6 +103,8 @@ fn handle_game_events(
                     // 本地模式：直接认输
                     let result = protocol::GameResult::BlackWin(protocol::WinReason::Resign);
                     game.set_result(result);
+                    game_state.set(GameState::GameOver);
+                    tracing::info!("玩家认输");
                 } else {
                     network_events.send(crate::network::NetworkEvent::SendResign);
                 }
