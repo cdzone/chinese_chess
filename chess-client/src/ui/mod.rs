@@ -14,12 +14,17 @@ use bevy::prelude::*;
 
 use crate::GameState;
 
+/// 基准分辨率（UI 设计基准）
+const BASE_RESOLUTION: (f32, f32) = (1280.0, 720.0);
+
 /// UI 插件
 pub struct UiPlugin;
 
 impl Plugin for UiPlugin {
     fn build(&self, app: &mut App) {
         app
+            // UI 缩放系统（全局运行）
+            .add_systems(Update, update_ui_scale)
             // 主菜单
             .add_systems(OnEnter(GameState::Menu), setup_menu)
             .add_systems(OnExit(GameState::Menu), cleanup_menu)
@@ -44,6 +49,23 @@ impl Plugin for UiPlugin {
             .add_systems(OnEnter(GameState::GameOver), setup_game_over_ui)
             .add_systems(OnExit(GameState::GameOver), cleanup_game_over_ui)
             .add_systems(Update, handle_game_over_buttons.run_if(in_state(GameState::GameOver)));
+    }
+}
+
+/// 根据窗口大小动态调整 UI 缩放
+fn update_ui_scale(windows: Query<&Window>, mut ui_scale: ResMut<UiScale>) {
+    let Ok(window) = windows.get_single() else {
+        return;
+    };
+
+    // 计算缩放比例：取宽高比例的较小值，确保 UI 不会超出屏幕
+    let scale_x = window.width() / BASE_RESOLUTION.0;
+    let scale_y = window.height() / BASE_RESOLUTION.1;
+    let scale = scale_x.min(scale_y).max(0.5); // 最小缩放 0.5，避免太小
+
+    // 只在缩放变化时更新，避免不必要的重绘
+    if (ui_scale.0 - scale).abs() > 0.01 {
+        ui_scale.0 = scale;
     }
 }
 
