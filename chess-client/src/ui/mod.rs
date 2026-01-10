@@ -6,11 +6,13 @@ mod menu;
 mod game_ui;
 mod settings_ui;
 mod lobby_ui;
+mod saved_games_ui;
 
 pub use menu::*;
 pub use game_ui::*;
 pub use settings_ui::*;
 pub use lobby_ui::*;
+pub use saved_games_ui::*;
 
 use bevy::prelude::*;
 use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
@@ -29,6 +31,8 @@ impl Plugin for UiPlugin {
         app
             // 添加帧率诊断插件
             .add_plugins(FrameTimeDiagnosticsPlugin::default())
+            // 添加保存棋局列表资源
+            .init_resource::<SavedGamesList>()
             // UI 缩放系统（全局运行）
             .add_systems(Update, (update_ui_scale, update_fps_display))
             // 启动时创建 FPS 显示
@@ -37,6 +41,14 @@ impl Plugin for UiPlugin {
             .add_systems(OnEnter(GameState::Menu), setup_menu)
             .add_systems(OnExit(GameState::Menu), cleanup_menu)
             .add_systems(Update, handle_menu_buttons.run_if(in_state(GameState::Menu)))
+            // 保存的棋局列表
+            .add_systems(OnEnter(GameState::SavedGames), setup_saved_games)
+            .add_systems(OnExit(GameState::SavedGames), cleanup_saved_games)
+            .add_systems(
+                Update,
+                (handle_saved_games_buttons, update_saved_games_list)
+                    .run_if(in_state(GameState::SavedGames)),
+            )
             // 大厅（房间列表）
             .add_systems(OnEnter(GameState::Lobby), setup_lobby)
             .add_systems(OnExit(GameState::Lobby), cleanup_lobby)
@@ -164,6 +176,7 @@ pub enum ButtonAction {
     // 游戏结束
     BackToMenu,
     PlayAgain,
+    ExportGame,
     // 大厅
     RefreshRooms,
     BackToMenuFromLobby,

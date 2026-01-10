@@ -6,12 +6,14 @@ pub mod board;
 pub mod game;
 pub mod network;
 pub mod settings;
+pub mod storage;
 pub mod theme;
 pub mod ui;
 
 use bevy::prelude::*;
 
 pub use settings::GameSettings;
+pub use storage::{SavedGameInfo, StorageManager};
 
 /// 游戏状态
 #[derive(Debug, Clone, Copy, Default, Eq, PartialEq, Hash, States)]
@@ -21,6 +23,8 @@ pub enum GameState {
     Menu,
     /// 设置页面
     Settings,
+    /// 保存的棋局列表
+    SavedGames,
     /// 连接服务器
     Connecting,
     /// 房间列表/等待

@@ -101,8 +101,8 @@ pub fn setup_menu(mut commands: Commands, asset_server: Res<AssetServer>) {
                     ..default()
                 })
                 .with_children(|parent| {
-                    // 加载棋局（功能开发中，显示灰色）
-                    spawn_disabled_button(
+                    // 加载棋局
+                    spawn_menu_button(
                         parent,
                         &asset_server,
                         "加载棋局",
@@ -187,36 +187,6 @@ fn spawn_menu_button(
                     ..default()
                 },
                 TextColor(Color::WHITE),
-            ));
-        });
-}
-
-/// 禁用按钮颜色
-const DISABLED_BUTTON: Color = Color::srgb(0.18, 0.18, 0.18);
-
-/// 生成禁用状态的菜单按钮（功能开发中）
-fn spawn_disabled_button(
-    parent: &mut ChildSpawnerCommands,
-    asset_server: &AssetServer,
-    text: &str,
-    action: ButtonAction,
-) {
-    parent
-        .spawn((
-            Button,
-            button_style(),
-            BackgroundColor(DISABLED_BUTTON),
-            action,
-        ))
-        .with_children(|parent| {
-            parent.spawn((
-                Text::new(format!("{} (开发中)", text)),
-                TextFont {
-                    font: asset_server.load("fonts/SourceHanSansSC-Regular.otf"),
-                    font_size: 24.0,
-                    ..default()
-                },
-                TextColor(Color::srgb(0.5, 0.5, 0.5)),  // 灰色文字
             ));
         });
 }
@@ -315,8 +285,7 @@ fn handle_button_action(
             game_state.set(GameState::Lobby);
         }
         ButtonAction::LoadGame => {
-            // TODO: 显示加载棋局界面
-            tracing::info!("Load game clicked");
+            game_state.set(GameState::SavedGames);
         }
         ButtonAction::Settings => {
             game_state.set(GameState::Settings);

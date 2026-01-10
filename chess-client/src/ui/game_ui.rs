@@ -391,6 +391,7 @@ pub fn handle_game_buttons(
     >,
     mut game_events: MessageWriter<GameEvent>,
     game: Res<ClientGame>,
+    settings: Res<crate::settings::GameSettings>,
 ) {
     for (interaction, mut color, action) in &mut interaction_query {
         match *interaction {
@@ -411,8 +412,7 @@ pub fn handle_game_buttons(
                         }
                     }
                     ButtonAction::SaveGame => {
-                        // TODO: 保存游戏
-                        tracing::info!("Save game clicked");
+                        save_current_game(&game, &settings);
                     }
                     _ => {}
                 }
@@ -423,6 +423,151 @@ pub fn handle_game_buttons(
             Interaction::None => {
                 *color = NORMAL_BUTTON.into();
             }
+        }
+    }
+}
+
+/// 导出棋谱记录（LLM 友好格式）
+fn export_game_record(game: &ClientGame, settings: &crate::settings::GameSettings) {
+    use protocol::{GameRecord, MoveRecord as ProtoMoveRecord};
+    use std::fs;
+
+    // 确定玩家名称
+    let red_player = settings.nickname.clone();
+    let black_player = match &game.game_mode {
+        Some(crate::game::GameMode::LocalPvE { difficulty }) => {
+            format!("AI-{:?}", difficulty)
+        }
+        Some(crate::game::GameMode::OnlinePvE { difficulty, .. }) => {
+            format!("AI-{:?}", difficulty)
+        }
+        _ => "对手".to_string(),
+    };
+
+    // 创建棋谱记录
+    let mut record = GameRecord::new(red_player.clone(), black_player.clone());
+
+    // 设置 AI 难度
+    if let Some(difficulty) = game.game_mode.as_ref().and_then(|m| m.difficulty()) {
+        record.set_ai_difficulty(&format!("{:?}", difficulty));
+    }
+
+    // 添加走法历史
+    for mv in &game.move_history {
+        record.add_move(ProtoMoveRecord::new(mv.from, mv.to, mv.notation.clone()));
+    }
+
+    // 设置游戏结果
+    if let Some(ref result) = game.game_result {
+        record.set_result(result.clone());
+    }
+
+    // 获取导出目录
+    let export_dir = dirs::document_dir()
+        .or_else(|| dirs::home_dir())
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    let export_dir = export_dir.join("chinese-chess-exports");
+
+    // 确保目录存在
+    if let Err(e) = fs::create_dir_all(&export_dir) {
+        tracing::error!("创建导出目录失败: {}", e);
+        return;
+    }
+
+    // 生成文件名
+    let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
+
+    // 导出 JSON 格式
+    let json_filename = format!("{}_{}_vs_{}.json", timestamp, red_player, black_player);
+    let json_path = export_dir.join(&json_filename);
+    match record.to_json() {
+        Ok(json) => {
+            if let Err(e) = fs::write(&json_path, &json) {
+                tracing::error!("写入 JSON 文件失败: {}", e);
+            } else {
+                tracing::info!("棋谱已导出: {:?}", json_path);
+            }
+        }
+        Err(e) => {
+            tracing::error!("序列化 JSON 失败: {}", e);
+        }
+    }
+
+    // 导出 LLM 友好的文本格式
+    let txt_filename = format!("{}_{}_vs_{}_llm.txt", timestamp, red_player, black_player);
+    let txt_path = export_dir.join(&txt_filename);
+    let llm_format = record.to_llm_format();
+    if let Err(e) = fs::write(&txt_path, &llm_format) {
+        tracing::error!("写入 LLM 文本文件失败: {}", e);
+    } else {
+        tracing::info!("LLM 格式棋谱已导出: {:?}", txt_path);
+    }
+
+    tracing::info!("棋谱导出完成，保存在: {:?}", export_dir);
+}
+
+/// 保存当前游戏
+fn save_current_game(game: &ClientGame, settings: &crate::settings::GameSettings) {
+    use crate::storage::StorageManager;
+    use protocol::{GameRecord, MoveRecord as ProtoMoveRecord};
+
+    // 获取当前游戏状态
+    let Some(ref board_state) = game.game_state else {
+        tracing::warn!("无法保存：游戏状态为空");
+        return;
+    };
+
+    // 确定玩家名称
+    let red_player = settings.nickname.clone();
+    let black_player = match &game.game_mode {
+        Some(crate::game::GameMode::LocalPvE { difficulty }) => {
+            format!("AI-{:?}", difficulty)
+        }
+        Some(crate::game::GameMode::OnlinePvE { difficulty, .. }) => {
+            format!("AI-{:?}", difficulty)
+        }
+        _ => "对手".to_string(),
+    };
+
+    // 创建棋谱记录
+    let mut record = GameRecord::new(red_player.clone(), black_player.clone());
+
+    // 设置 AI 难度
+    if let Some(difficulty) = game.game_mode.as_ref().and_then(|m| m.difficulty()) {
+        record.set_ai_difficulty(&format!("{:?}", difficulty));
+    }
+
+    // 添加走法历史
+    for mv in &game.move_history {
+        record.add_move(ProtoMoveRecord::new(mv.from, mv.to, mv.notation.clone()));
+    }
+
+    // 设置游戏结果
+    if let Some(ref result) = game.game_result {
+        record.set_result(result.clone());
+    }
+
+    // 保存棋局
+    match StorageManager::new() {
+        Ok(storage) => {
+            match storage.save_game(
+                &red_player,
+                &black_player,
+                &mut record,
+                board_state,
+                game.red_time_ms,
+                game.black_time_ms,
+            ) {
+                Ok(filename) => {
+                    tracing::info!("棋局已保存: {}", filename);
+                }
+                Err(e) => {
+                    tracing::error!("保存棋局失败: {}", e);
+                }
+            }
+        }
+        Err(e) => {
+            tracing::error!("初始化存储失败: {}", e);
         }
     }
 }
@@ -585,7 +730,7 @@ pub fn setup_game_over_ui(
                         .spawn(Node {
                             flex_direction: FlexDirection::Row,
                             justify_content: JustifyContent::Center,
-                            column_gap: Val::Px(20.0),
+                            column_gap: Val::Px(15.0),
                             margin: UiRect::top(Val::Px(10.0)),
                             ..default()
                         })
@@ -597,6 +742,15 @@ pub fn setup_game_over_ui(
                                 "返回主菜单",
                                 ButtonAction::BackToMenu,
                                 Color::srgb(0.3, 0.3, 0.3),
+                            );
+
+                            // 导出棋谱按钮
+                            spawn_result_button(
+                                parent,
+                                &asset_server,
+                                "导出棋谱",
+                                ButtonAction::ExportGame,
+                                Color::srgb(0.3, 0.4, 0.5),
                             );
 
                             // 再来一局按钮
@@ -717,6 +871,9 @@ pub fn handle_game_over_buttons(
                         game.reset();
                         // 返回主菜单
                         game_state.set(GameState::Menu);
+                    }
+                    ButtonAction::ExportGame => {
+                        export_game_record(&game, &settings);
                     }
                     ButtonAction::PlayAgain => {
                         tracing::info!("Play again clicked");
