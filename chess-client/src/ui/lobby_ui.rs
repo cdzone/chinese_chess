@@ -181,9 +181,20 @@ pub fn update_room_list(
             ));
         });
     } else {
+        // 对房间列表排序：等待中 > 游戏中 > 暂停中 > 已结束
+        let mut sorted_rooms = network.room_list.clone();
+        sorted_rooms.sort_by_key(|r| {
+            match r.state {
+                RoomState::Waiting => 0,
+                RoomState::Playing => 1,
+                RoomState::Paused => 2,
+                RoomState::Finished => 3,
+            }
+        });
+        
         // 显示房间列表
         commands.entity(container).with_children(|parent| {
-            for room in &network.room_list {
+            for room in &sorted_rooms {
                 spawn_room_entry(parent, &asset_server, room);
             }
         });

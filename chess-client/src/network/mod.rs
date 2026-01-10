@@ -9,6 +9,7 @@ pub use connection::*;
 use bevy::prelude::*;
 use protocol::{Position, ClientMessage, ServerMessage};
 use std::sync::Arc;
+use std::time::Instant;
 
 use crate::GameState;
 
@@ -27,6 +28,7 @@ impl Plugin for NetworkPlugin {
                     handle_network_events,
                     handle_server_messages,
                     poll_network,
+                    check_quick_match_timeout,
                 ),
             );
     }
@@ -73,7 +75,12 @@ pub struct NetworkState {
     pub room_list: Vec<protocol::RoomInfo>,
     /// 是否正在快速匹配
     pub is_quick_matching: bool,
+    /// 快速匹配开始时间（用于超时检测）
+    pub quick_match_start: Option<Instant>,
 }
+
+/// 快速匹配超时时间（秒）
+const QUICK_MATCH_TIMEOUT_SECS: u64 = 10;
 
 /// 连接状态
 #[derive(Default, Clone, Copy, Debug, PartialEq, Eq)]
@@ -250,6 +257,7 @@ fn handle_server_messages(
                     PendingAction::QuickMatch => {
                         // 快速匹配：先获取房间列表
                         network.is_quick_matching = true;
+                        network.quick_match_start = Some(Instant::now());
                         let msg = ClientMessage::ListRooms;
                         conn_handle.connection.queue_send(msg);
                         tracing::info!("Quick match: fetching room list");
@@ -310,6 +318,7 @@ fn handle_server_messages(
                 // 如果正在快速匹配，自动加入或创建房间
                 if network.is_quick_matching {
                     network.is_quick_matching = false;
+                    network.quick_match_start = None;  // 清除超时计时器
                     
                     // 查找等待中的 PvP 房间
                     let waiting_room = rooms.iter().find(|r| {
@@ -360,5 +369,30 @@ fn poll_network(
         }
         
         server_events.send(ServerMessageEvent(msg));
+    }
+}
+
+/// 检查快速匹配超时
+fn check_quick_match_timeout(
+    mut network: ResMut<NetworkState>,
+    mut game_state: ResMut<NextState<GameState>>,
+    conn_handle: Res<NetworkConnectionHandle>,
+) {
+    if !network.is_quick_matching {
+        return;
+    }
+    
+    if let Some(start_time) = network.quick_match_start {
+        if start_time.elapsed().as_secs() > QUICK_MATCH_TIMEOUT_SECS {
+            tracing::warn!("Quick match timeout after {} seconds, returning to menu", QUICK_MATCH_TIMEOUT_SECS);
+            
+            // 清除快速匹配状态
+            network.is_quick_matching = false;
+            network.quick_match_start = None;
+            
+            // 断开连接并返回主菜单
+            conn_handle.connection.disconnect();
+            game_state.set(GameState::Menu);
+        }
     }
 }
