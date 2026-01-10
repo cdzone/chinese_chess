@@ -4,7 +4,7 @@ use bevy::prelude::*;
 use protocol::{RoomInfo, RoomState, RoomType};
 
 use super::{ButtonAction, UiMarker, button_style, NORMAL_BUTTON, HOVERED_BUTTON, PRESSED_BUTTON};
-use crate::network::{NetworkEvent, NetworkState};
+use crate::network::{ConnectionStatus, NetworkEvent, NetworkState};
 use crate::GameState;
 
 /// 大厅 UI 标记
@@ -106,7 +106,7 @@ pub fn setup_lobby(mut commands: Commands, asset_server: Res<AssetServer>) {
 
 /// 生成大厅按钮
 fn spawn_lobby_button(
-    parent: &mut ChildBuilder,
+    parent: &mut ChildSpawnerCommands,
     asset_server: &AssetServer,
     text: &str,
     action: ButtonAction,
@@ -134,7 +134,7 @@ fn spawn_lobby_button(
 /// 清理大厅 UI
 pub fn cleanup_lobby(mut commands: Commands, query: Query<Entity, With<LobbyMarker>>) {
     for entity in query.iter() {
-        commands.entity(entity).despawn_recursive();
+        commands.entity(entity).despawn();
     }
 }
 
@@ -143,25 +143,80 @@ pub fn update_room_list(
     mut commands: Commands,
     network: Res<NetworkState>,
     asset_server: Res<AssetServer>,
-    container_query: Query<Entity, With<RoomListContainer>>,
-    entry_query: Query<Entity, With<RoomEntry>>,
+    container_query: Query<(Entity, Option<&Children>), With<RoomListContainer>>,
 ) {
     // 只在房间列表变化时更新
     if !network.is_changed() {
         return;
     }
 
-    let Ok(container) = container_query.get_single() else {
+    let Ok((container, children)) = container_query.single() else {
         return;
     };
 
-    // 清除现有条目
-    for entity in entry_query.iter() {
-        commands.entity(entity).despawn_recursive();
+    // 清除容器的所有子节点
+    if let Some(children) = children {
+        for child in children.iter() {
+            commands.entity(child).despawn();
+        }
     }
 
-    // 清除容器的所有子节点并重新添加
-    commands.entity(container).despawn_descendants();
+    // 检查连接错误
+    if network.status == ConnectionStatus::Error {
+        let error_msg = network.connection_error.as_deref().unwrap_or("连接失败");
+        commands.entity(container).with_children(|parent| {
+            // 错误图标和消息
+            parent.spawn((
+                Text::new(format!("⚠ {}", error_msg)),
+                TextFont {
+                    font: asset_server.load("fonts/SourceHanSansSC-Bold.otf"),
+                    font_size: 20.0,
+                    ..default()
+                },
+                TextColor(Color::srgb(0.9, 0.4, 0.3)),
+                Node {
+                    margin: UiRect::all(Val::Px(20.0)),
+                    ..default()
+                },
+            ));
+            
+            // 提示信息
+            parent.spawn((
+                Text::new("请检查服务器是否启动，或点击「返回」回到主菜单"),
+                TextFont {
+                    font: asset_server.load("fonts/SourceHanSansSC-Regular.otf"),
+                    font_size: 16.0,
+                    ..default()
+                },
+                TextColor(Color::srgb(0.6, 0.6, 0.6)),
+                Node {
+                    margin: UiRect::horizontal(Val::Px(20.0)),
+                    ..default()
+                },
+            ));
+        });
+        return;
+    }
+    
+    // 检查是否正在连接
+    if network.status == ConnectionStatus::Connecting {
+        commands.entity(container).with_children(|parent| {
+            parent.spawn((
+                Text::new("正在连接服务器..."),
+                TextFont {
+                    font: asset_server.load("fonts/SourceHanSansSC-Regular.otf"),
+                    font_size: 18.0,
+                    ..default()
+                },
+                TextColor(Color::srgb(0.6, 0.6, 0.6)),
+                Node {
+                    margin: UiRect::all(Val::Px(20.0)),
+                    ..default()
+                },
+            ));
+        });
+        return;
+    }
 
     if network.room_list.is_empty() {
         // 显示空列表提示
@@ -202,7 +257,7 @@ pub fn update_room_list(
 }
 
 /// 生成房间条目
-fn spawn_room_entry(parent: &mut ChildBuilder, asset_server: &AssetServer, room: &RoomInfo) {
+fn spawn_room_entry(parent: &mut ChildSpawnerCommands, asset_server: &AssetServer, room: &RoomInfo) {
     let status_text = match room.state {
         RoomState::Waiting => "等待中",
         RoomState::Playing => "游戏中",
@@ -322,7 +377,7 @@ pub fn handle_lobby_buttons(
         (&Interaction, &mut BackgroundColor, &ButtonAction),
         (Changed<Interaction>, With<Button>),
     >,
-    mut network_events: EventWriter<NetworkEvent>,
+    mut network_events: MessageWriter<NetworkEvent>,
     mut game_state: ResMut<NextState<GameState>>,
 ) {
     for (interaction, mut color, action) in &mut interaction_query {
@@ -332,15 +387,15 @@ pub fn handle_lobby_buttons(
                 
                 match action {
                     ButtonAction::RefreshRooms => {
-                        network_events.send(NetworkEvent::ListRooms);
+                        network_events.write(NetworkEvent::ListRooms);
                         tracing::info!("Refreshing room list");
                     }
                     ButtonAction::BackToMenuFromLobby => {
-                        network_events.send(NetworkEvent::Disconnect);
+                        network_events.write(NetworkEvent::Disconnect);
                         game_state.set(GameState::Menu);
                     }
                     ButtonAction::JoinRoomById(room_id) => {
-                        network_events.send(NetworkEvent::JoinRoom { room_id: *room_id });
+                        network_events.write(NetworkEvent::JoinRoom { room_id: *room_id });
                         tracing::info!("Joining room: {}", room_id);
                     }
                     _ => {}

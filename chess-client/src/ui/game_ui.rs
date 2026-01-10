@@ -1,5 +1,6 @@
 //! 游戏界面 UI
 
+use bevy::input::mouse::MouseWheel;
 use bevy::prelude::*;
 
 use super::{ButtonAction, GameUiMarker, UiMarker, NORMAL_BUTTON, HOVERED_BUTTON, PRESSED_BUTTON};
@@ -16,6 +17,10 @@ pub struct TimerDisplay {
 /// 棋谱显示组件
 #[derive(Component)]
 pub struct MoveHistoryDisplay;
+
+/// 棋谱滚动容器标记
+#[derive(Component)]
+pub struct MoveHistoryScrollContainer;
 
 /// 暂停按钮文字标记
 #[derive(Component)]
@@ -102,7 +107,7 @@ pub fn setup_game_ui(mut commands: Commands, asset_server: Res<AssetServer>) {
 }
 
 /// 生成玩家信息区
-fn spawn_player_info(parent: &mut ChildBuilder, asset_server: &AssetServer, name: &str, is_red: bool) {
+fn spawn_player_info(parent: &mut ChildSpawnerCommands, asset_server: &AssetServer, name: &str, is_red: bool) {
     parent
         .spawn(Node {
             flex_direction: FlexDirection::Column,
@@ -141,20 +146,24 @@ fn spawn_player_info(parent: &mut ChildBuilder, asset_server: &AssetServer, name
 }
 
 /// 生成棋谱区域
-fn spawn_move_history(parent: &mut ChildBuilder, asset_server: &AssetServer) {
+fn spawn_move_history(parent: &mut ChildSpawnerCommands, asset_server: &AssetServer) {
     parent
         .spawn((
             Node {
                 flex_direction: FlexDirection::Column,
                 flex_grow: 1.0,
-                flex_shrink: 1.0,  // 允许收缩
-                min_height: Val::Px(50.0),  // 最小高度
+                flex_shrink: 1.0,
+                flex_basis: Val::Px(0.0),
+                min_height: Val::Px(100.0),
                 padding: UiRect::all(Val::Px(10.0)),
                 margin: UiRect::vertical(Val::Px(10.0)),
-                overflow: Overflow::clip_y(),
+                overflow: Overflow::scroll_y(),
                 ..default()
             },
             BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.3)),
+            ScrollPosition::default(),
+            MoveHistoryScrollContainer,
+            Interaction::default(),  // 需要 Interaction 来检测鼠标悬停
         ))
         .with_children(|parent| {
             // 标题
@@ -184,7 +193,7 @@ fn spawn_move_history(parent: &mut ChildBuilder, asset_server: &AssetServer) {
 }
 
 /// 生成游戏按钮
-fn spawn_game_buttons(parent: &mut ChildBuilder, asset_server: &AssetServer) {
+fn spawn_game_buttons(parent: &mut ChildSpawnerCommands, asset_server: &AssetServer) {
     parent
         .spawn(Node {
             flex_direction: FlexDirection::Column,
@@ -206,7 +215,7 @@ fn spawn_game_buttons(parent: &mut ChildBuilder, asset_server: &AssetServer) {
 
 /// 生成游戏按钮
 fn spawn_game_button(
-    parent: &mut ChildBuilder,
+    parent: &mut ChildSpawnerCommands,
     asset_server: &AssetServer,
     text: &str,
     action: ButtonAction,
@@ -239,7 +248,7 @@ fn spawn_game_button(
 }
 
 /// 生成暂停按钮（带标记以便动态更新文字）
-fn spawn_pause_button(parent: &mut ChildBuilder, asset_server: &AssetServer) {
+fn spawn_pause_button(parent: &mut ChildSpawnerCommands, asset_server: &AssetServer) {
     parent
         .spawn((
             Button,
@@ -271,7 +280,7 @@ fn spawn_pause_button(parent: &mut ChildBuilder, asset_server: &AssetServer) {
 /// 清理游戏 UI
 pub fn cleanup_game_ui(mut commands: Commands, query: Query<Entity, With<GameUiMarker>>) {
     for entity in query.iter() {
-        commands.entity(entity).despawn_recursive();
+        commands.entity(entity).despawn();
     }
 }
 
@@ -325,16 +334,20 @@ pub fn update_pause_button_text(
 pub fn update_move_history(
     game: Res<ClientGame>,
     mut commands: Commands,
-    query: Query<Entity, With<MoveHistoryDisplay>>,
+    query: Query<(Entity, Option<&Children>), With<MoveHistoryDisplay>>,
     asset_server: Res<AssetServer>,
 ) {
     if !game.is_changed() {
         return;
     }
 
-    for entity in query.iter() {
+    for (entity, children) in query.iter() {
         // 清除旧内容
-        commands.entity(entity).despawn_descendants();
+        if let Some(children) = children {
+            for child in children.iter() {
+                commands.entity(child).despawn();
+            }
+        }
 
         // 添加新内容
         commands.entity(entity).with_children(|parent| {
@@ -376,7 +389,7 @@ pub fn handle_game_buttons(
         (&Interaction, &mut BackgroundColor, &ButtonAction),
         (Changed<Interaction>, With<Button>),
     >,
-    mut game_events: EventWriter<GameEvent>,
+    mut game_events: MessageWriter<GameEvent>,
     game: Res<ClientGame>,
 ) {
     for (interaction, mut color, action) in &mut interaction_query {
@@ -385,16 +398,16 @@ pub fn handle_game_buttons(
                 *color = PRESSED_BUTTON.into();
                 match action {
                     ButtonAction::Undo => {
-                        game_events.send(GameEvent::RequestUndo);
+                        game_events.write(GameEvent::RequestUndo);
                     }
                     ButtonAction::Resign => {
-                        game_events.send(GameEvent::Resign);
+                        game_events.write(GameEvent::Resign);
                     }
                     ButtonAction::Pause => {
                         if game.is_paused {
-                            game_events.send(GameEvent::ResumeGame);
+                            game_events.write(GameEvent::ResumeGame);
                         } else {
-                            game_events.send(GameEvent::PauseGame);
+                            game_events.write(GameEvent::PauseGame);
                         }
                     }
                     ButtonAction::SaveGame => {
@@ -410,6 +423,33 @@ pub fn handle_game_buttons(
             Interaction::None => {
                 *color = NORMAL_BUTTON.into();
             }
+        }
+    }
+}
+
+/// 处理棋谱区域的鼠标滚轮滚动
+pub fn handle_move_history_scroll(
+    mut scroll_events: MessageReader<MouseWheel>,
+    mut query: Query<(&Interaction, &mut ScrollPosition, &ComputedNode), With<MoveHistoryScrollContainer>>,
+) {
+    for event in scroll_events.read() {
+        for (interaction, mut scroll_pos, computed) in &mut query {
+            // 只在鼠标悬停时响应滚轮
+            if *interaction != Interaction::Hovered && *interaction != Interaction::Pressed {
+                continue;
+            }
+            
+            let scroll_amount = match event.unit {
+                bevy::input::mouse::MouseScrollUnit::Line => event.y * 20.0,
+                bevy::input::mouse::MouseScrollUnit::Pixel => event.y,
+            };
+            
+            // 更新滚动位置（向上滚动减少 y，向下滚动增加 y）
+            let new_y = (scroll_pos.0.y - scroll_amount).max(0.0);
+            
+            // 限制最大滚动距离（内容高度 - 可见高度）
+            let max_scroll = (computed.content_size().y - computed.size().y).max(0.0);
+            scroll_pos.0.y = new_y.min(max_scroll);
         }
     }
 }
@@ -574,7 +614,7 @@ pub fn setup_game_over_ui(
 
 /// 生成结果页按钮
 fn spawn_result_button(
-    parent: &mut ChildBuilder,
+    parent: &mut ChildSpawnerCommands,
     asset_server: &AssetServer,
     text: &str,
     action: ButtonAction,
@@ -648,7 +688,7 @@ pub struct GameOverUiMarker;
 /// 清理游戏结束 UI
 pub fn cleanup_game_over_ui(mut commands: Commands, query: Query<Entity, With<GameOverUiMarker>>) {
     for entity in query.iter() {
-        commands.entity(entity).despawn_recursive();
+        commands.entity(entity).despawn();
     }
 }
 
@@ -660,7 +700,7 @@ pub fn handle_game_over_buttons(
     >,
     mut game_state: ResMut<NextState<GameState>>,
     mut game: ResMut<ClientGame>,
-    mut network_events: EventWriter<NetworkEvent>,
+    mut network_events: MessageWriter<NetworkEvent>,
     conn_handle: Res<crate::network::NetworkConnectionHandle>,
     settings: Res<crate::settings::GameSettings>,
 ) {
@@ -712,7 +752,7 @@ pub fn handle_game_over_buttons(
                                 game_state.set(GameState::Playing);
                                 
                                 // 使用设置中的服务器地址和昵称
-                                network_events.send(NetworkEvent::Connect {
+                                network_events.write(NetworkEvent::Connect {
                                     addr: settings.server_address.clone(),
                                     nickname: settings.nickname.clone(),
                                 });

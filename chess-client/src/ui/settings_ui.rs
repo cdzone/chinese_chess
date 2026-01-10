@@ -157,7 +157,7 @@ pub fn setup_settings(
 }
 
 /// 生成标签栏
-fn spawn_tab_bar(parent: &mut ChildBuilder, asset_server: &AssetServer) {
+fn spawn_tab_bar(parent: &mut ChildSpawnerCommands, asset_server: &AssetServer) {
     parent
         .spawn((
             Node {
@@ -177,7 +177,7 @@ fn spawn_tab_bar(parent: &mut ChildBuilder, asset_server: &AssetServer) {
 }
 
 /// 生成标签按钮
-fn spawn_tab_button(parent: &mut ChildBuilder, asset_server: &AssetServer, tab: SettingsTab) {
+fn spawn_tab_button(parent: &mut ChildSpawnerCommands, asset_server: &AssetServer, tab: SettingsTab) {
     let is_selected = tab == SettingsTab::Game; // 默认选中游戏标签
     parent
         .spawn((
@@ -213,7 +213,7 @@ fn spawn_tab_button(parent: &mut ChildBuilder, asset_server: &AssetServer, tab: 
 
 /// 生成内容区域
 fn spawn_content_area(
-    parent: &mut ChildBuilder,
+    parent: &mut ChildSpawnerCommands,
     asset_server: &AssetServer,
     settings: &GameSettings,
 ) {
@@ -242,7 +242,7 @@ pub struct ContentAreaMarker;
 
 /// 生成游戏设置内容
 fn spawn_game_settings(
-    parent: &mut ChildBuilder,
+    parent: &mut ChildSpawnerCommands,
     asset_server: &AssetServer,
     settings: &GameSettings,
 ) {
@@ -318,7 +318,7 @@ fn spawn_game_settings(
 
 /// 生成显示设置内容
 fn spawn_display_settings(
-    parent: &mut ChildBuilder,
+    parent: &mut ChildSpawnerCommands,
     asset_server: &AssetServer,
     settings: &GameSettings,
 ) {
@@ -367,7 +367,7 @@ fn spawn_display_settings(
 }
 
 /// 生成音频设置内容（预留）
-fn spawn_audio_settings(parent: &mut ChildBuilder, asset_server: &AssetServer) {
+fn spawn_audio_settings(parent: &mut ChildSpawnerCommands, asset_server: &AssetServer) {
     parent.spawn((
         Text::new("音频设置功能敬请期待..."),
         TextFont {
@@ -385,7 +385,7 @@ fn spawn_audio_settings(parent: &mut ChildBuilder, asset_server: &AssetServer) {
 
 /// 生成网络设置内容
 fn spawn_network_settings(
-    parent: &mut ChildBuilder,
+    parent: &mut ChildSpawnerCommands,
     asset_server: &AssetServer,
     settings: &GameSettings,
 ) {
@@ -418,7 +418,7 @@ fn spawn_network_settings(
 
 /// 生成高级设置内容
 fn spawn_advanced_settings(
-    parent: &mut ChildBuilder,
+    parent: &mut ChildSpawnerCommands,
     asset_server: &AssetServer,
     settings: &GameSettings,
 ) {
@@ -461,7 +461,7 @@ fn spawn_advanced_settings(
 
 /// 生成设置行（带左右箭头）
 fn spawn_setting_row(
-    parent: &mut ChildBuilder,
+    parent: &mut ChildSpawnerCommands,
     asset_server: &AssetServer,
     label: &str,
     value: &str,
@@ -527,7 +527,7 @@ fn spawn_setting_row(
 
 /// 生成开关行
 fn spawn_toggle_row(
-    parent: &mut ChildBuilder,
+    parent: &mut ChildSpawnerCommands,
     asset_server: &AssetServer,
     label: &str,
     value: bool,
@@ -591,7 +591,7 @@ fn spawn_toggle_row(
 
 /// 生成文本显示行（只读）
 fn spawn_text_display_row(
-    parent: &mut ChildBuilder,
+    parent: &mut ChildSpawnerCommands,
     asset_server: &AssetServer,
     label: &str,
     value: &str,
@@ -633,7 +633,7 @@ fn spawn_text_display_row(
 
 /// 生成箭头按钮
 fn spawn_arrow_button(
-    parent: &mut ChildBuilder,
+    parent: &mut ChildSpawnerCommands,
     asset_server: &AssetServer,
     text: &str,
     action: SettingsAction,
@@ -665,7 +665,7 @@ fn spawn_arrow_button(
 }
 
 /// 生成底部按钮栏
-fn spawn_bottom_buttons(parent: &mut ChildBuilder, asset_server: &AssetServer) {
+fn spawn_bottom_buttons(parent: &mut ChildSpawnerCommands, asset_server: &AssetServer) {
     parent
         .spawn(Node {
             width: Val::Px(800.0),
@@ -690,7 +690,7 @@ fn spawn_bottom_buttons(parent: &mut ChildBuilder, asset_server: &AssetServer) {
 
 /// 生成底部按钮
 fn spawn_bottom_button(
-    parent: &mut ChildBuilder,
+    parent: &mut ChildSpawnerCommands,
     asset_server: &AssetServer,
     text: &str,
     action: SettingsAction,
@@ -721,7 +721,7 @@ pub fn cleanup_settings(
     query: Query<Entity, With<SettingsMarker>>,
 ) {
     for entity in query.iter() {
-        commands.entity(entity).despawn_recursive();
+        commands.entity(entity).despawn();
     }
     commands.remove_resource::<TempSettings>();
     commands.remove_resource::<CurrentSettingsTab>();
@@ -898,7 +898,7 @@ fn apply_display_settings(
 ) {
     use std::time::Duration;
     
-    if let Ok(mut window) = windows.get_single_mut() {
+    if let Ok(mut window) = windows.single_mut() {
         // 分辨率
         window.resolution = WindowResolution::new(
             settings.resolution.width(),
@@ -984,15 +984,19 @@ pub fn update_tab_content(
     current_tab: Res<CurrentSettingsTab>,
     temp_settings: Res<TempSettings>,
     asset_server: Res<AssetServer>,
-    content_query: Query<Entity, With<ContentAreaMarker>>,
+    content_query: Query<(Entity, Option<&Children>), With<ContentAreaMarker>>,
 ) {
     if !current_tab.is_changed() {
         return;
     }
 
     // 清除现有内容
-    for entity in content_query.iter() {
-        commands.entity(entity).despawn_descendants();
+    for (entity, children) in content_query.iter() {
+        if let Some(children) = children {
+            for child in children.iter() {
+                commands.entity(child).despawn();
+            }
+        }
 
         // 重新生成内容
         commands.entity(entity).with_children(|parent| {

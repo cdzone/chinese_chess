@@ -21,7 +21,7 @@ pub struct GamePlugin;
 impl Plugin for GamePlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(ClientGame::default())
-            .add_event::<GameEvent>()
+            .add_message::<GameEvent>()
             .add_plugins(LocalAiPlugin)
             .add_systems(
                 Update,
@@ -37,7 +37,7 @@ impl Plugin for GamePlugin {
 }
 
 /// 游戏事件
-#[derive(Event, Clone, Debug)]
+#[derive(Message, Clone, Debug)]
 pub enum GameEvent {
     /// 选择棋子
     SelectPiece { x: u8, y: u8 },
@@ -57,9 +57,9 @@ pub enum GameEvent {
 
 /// 处理游戏事件
 fn handle_game_events(
-    mut events: EventReader<GameEvent>,
+    mut events: MessageReader<GameEvent>,
     mut game: ResMut<ClientGame>,
-    mut network_events: EventWriter<crate::network::NetworkEvent>,
+    mut network_events: MessageWriter<crate::network::NetworkEvent>,
     mut game_state: ResMut<NextState<GameState>>,
 ) {
     for event in events.read() {
@@ -77,7 +77,7 @@ fn handle_game_events(
                         execute_local_move(&mut game, from, to);
                     } else {
                         // 在线模式：发送网络消息
-                        network_events.send(crate::network::NetworkEvent::SendMove { from, to });
+                        network_events.write(crate::network::NetworkEvent::SendMove { from, to });
                     }
                 }
                 // 清除选择
@@ -95,7 +95,7 @@ fn handle_game_events(
                         tracing::warn!("无法悔棋：没有可撤销的走法");
                     }
                 } else {
-                    network_events.send(crate::network::NetworkEvent::SendUndo);
+                    network_events.write(crate::network::NetworkEvent::SendUndo);
                 }
             }
             GameEvent::Resign => {
@@ -106,7 +106,7 @@ fn handle_game_events(
                     game_state.set(GameState::GameOver);
                     tracing::info!("玩家认输");
                 } else {
-                    network_events.send(crate::network::NetworkEvent::SendResign);
+                    network_events.write(crate::network::NetworkEvent::SendResign);
                 }
             }
             GameEvent::PauseGame => {
@@ -114,7 +114,7 @@ fn handle_game_events(
                     game.is_paused = true;
                     tracing::info!("游戏已暂停");
                 } else {
-                    network_events.send(crate::network::NetworkEvent::SendPause);
+                    network_events.write(crate::network::NetworkEvent::SendPause);
                 }
             }
             GameEvent::ResumeGame => {
@@ -122,7 +122,7 @@ fn handle_game_events(
                     game.is_paused = false;
                     tracing::info!("游戏已继续");
                 } else {
-                    network_events.send(crate::network::NetworkEvent::SendResume);
+                    network_events.write(crate::network::NetworkEvent::SendResume);
                 }
             }
         }

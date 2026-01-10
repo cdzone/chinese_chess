@@ -57,7 +57,7 @@ impl Plugin for UiPlugin {
             .add_systems(OnExit(GameState::Playing), cleanup_game_ui)
             .add_systems(
                 Update,
-                (update_timer_display, update_move_history, update_pause_button_text, handle_game_buttons, update_ai_thinking_indicator)
+                (update_timer_display, update_move_history, update_pause_button_text, handle_game_buttons, update_ai_thinking_indicator, handle_move_history_scroll)
                     .run_if(in_state(GameState::Playing)),
             )
             // 游戏结束
@@ -117,7 +117,7 @@ fn update_fps_display(
 
 /// 根据窗口大小动态调整 UI 缩放
 fn update_ui_scale(windows: Query<&Window>, mut ui_scale: ResMut<UiScale>) {
-    let Ok(window) = windows.get_single() else {
+    let Ok(window) = windows.single() else {
         return;
     };
 

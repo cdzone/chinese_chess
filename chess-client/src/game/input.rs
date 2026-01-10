@@ -13,7 +13,7 @@ pub fn handle_mouse_input(
     camera_query: Query<(&Camera, &GlobalTransform)>,
     layout: Res<BoardLayout>,
     game: Res<ClientGame>,
-    mut events: EventWriter<GameEvent>,
+    mut events: MessageWriter<GameEvent>,
 ) {
     // 只处理左键点击
     if !mouse_button.just_pressed(MouseButton::Left) {
@@ -26,13 +26,15 @@ pub fn handle_mouse_input(
     }
 
     // 获取鼠标位置
-    let window = windows.single();
+    let Ok(window) = windows.single() else {
+        return;
+    };
     let Some(cursor_position) = window.cursor_position() else {
         return;
     };
 
     // 转换为世界坐标
-    let Ok((camera, camera_transform)) = camera_query.get_single() else {
+    let Ok((camera, camera_transform)) = camera_query.single() else {
         return;
     };
 
@@ -52,7 +54,7 @@ pub fn handle_mouse_input(
 
     if game.valid_moves.contains(&clicked_pos) {
         if let Some(from) = game.selected_piece {
-            events.send(GameEvent::MovePiece {
+            events.write(GameEvent::MovePiece {
                 from_x: from.x,
                 from_y: from.y,
                 to_x: x,
@@ -66,7 +68,7 @@ pub fn handle_mouse_input(
     if let Some(state) = &game.game_state {
         if let Some(piece) = state.board.get(clicked_pos) {
             if Some(piece.side) == game.player_side {
-                events.send(GameEvent::SelectPiece { x, y });
+                events.write(GameEvent::SelectPiece { x, y });
                 return;
             }
         }
@@ -74,6 +76,6 @@ pub fn handle_mouse_input(
 
     // 点击空白处取消选择
     if game.selected_piece.is_some() {
-        events.send(GameEvent::Deselect);
+        events.write(GameEvent::Deselect);
     }
 }

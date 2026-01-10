@@ -130,7 +130,7 @@ pub fn setup_menu(mut commands: Commands, asset_server: Res<AssetServer>) {
 
 /// 生成菜单分组
 fn spawn_menu_section(
-    parent: &mut ChildBuilder,
+    parent: &mut ChildSpawnerCommands,
     asset_server: &AssetServer,
     title: &str,
     buttons: Vec<(&str, ButtonAction)>,
@@ -166,7 +166,7 @@ fn spawn_menu_section(
 
 /// 生成菜单按钮
 fn spawn_menu_button(
-    parent: &mut ChildBuilder,
+    parent: &mut ChildSpawnerCommands,
     asset_server: &AssetServer,
     text: &str,
     action: ButtonAction,
@@ -196,7 +196,7 @@ const DISABLED_BUTTON: Color = Color::srgb(0.18, 0.18, 0.18);
 
 /// 生成禁用状态的菜单按钮（功能开发中）
 fn spawn_disabled_button(
-    parent: &mut ChildBuilder,
+    parent: &mut ChildSpawnerCommands,
     asset_server: &AssetServer,
     text: &str,
     action: ButtonAction,
@@ -224,7 +224,7 @@ fn spawn_disabled_button(
 /// 清理主菜单
 pub fn cleanup_menu(mut commands: Commands, query: Query<Entity, With<MenuMarker>>) {
     for entity in query.iter() {
-        commands.entity(entity).despawn_recursive();
+        commands.entity(entity).despawn();
     }
 }
 
@@ -234,10 +234,10 @@ pub fn handle_menu_buttons(
         (&Interaction, &mut BackgroundColor, &ButtonAction),
         (Changed<Interaction>, With<Button>),
     >,
-    mut network_events: EventWriter<NetworkEvent>,
+    mut network_events: MessageWriter<NetworkEvent>,
     mut game_state: ResMut<NextState<GameState>>,
     mut game: ResMut<ClientGame>,
-    mut exit: EventWriter<AppExit>,
+    mut exit: MessageWriter<AppExit>,
     mut network_state: ResMut<crate::network::NetworkState>,
     settings: Res<GameSettings>,
 ) {
@@ -260,10 +260,10 @@ pub fn handle_menu_buttons(
 /// 处理按钮动作
 fn handle_button_action(
     action: &ButtonAction,
-    network_events: &mut EventWriter<NetworkEvent>,
+    network_events: &mut MessageWriter<NetworkEvent>,
     game_state: &mut ResMut<NextState<GameState>>,
     game: &mut ResMut<ClientGame>,
-    exit: &mut EventWriter<AppExit>,
+    exit: &mut MessageWriter<AppExit>,
     network_state: &mut ResMut<crate::network::NetworkState>,
     settings: &GameSettings,
 ) {
@@ -283,7 +283,7 @@ fn handle_button_action(
             // 快速匹配：登录后自动加入或创建房间
             network_state.pending_action = crate::network::PendingAction::QuickMatch;
             
-            network_events.send(NetworkEvent::Connect {
+            network_events.write(NetworkEvent::Connect {
                 addr: settings.server_address.clone(),
                 nickname: settings.nickname.clone(),
             });
@@ -298,7 +298,7 @@ fn handle_button_action(
             };
             
             // 使用设置中的服务器地址和昵称
-            network_events.send(NetworkEvent::Connect {
+            network_events.write(NetworkEvent::Connect {
                 addr: settings.server_address.clone(),
                 nickname: settings.nickname.clone(),
             });
@@ -308,7 +308,7 @@ fn handle_button_action(
             network_state.pending_action = crate::network::PendingAction::ListRooms;
             
             // 使用设置中的服务器地址和昵称
-            network_events.send(NetworkEvent::Connect {
+            network_events.write(NetworkEvent::Connect {
                 addr: settings.server_address.clone(),
                 nickname: settings.nickname.clone(),
             });
@@ -322,7 +322,7 @@ fn handle_button_action(
             game_state.set(GameState::Settings);
         }
         ButtonAction::ExitGame => {
-            exit.send(AppExit::Success);
+            exit.write(AppExit::Success);
         }
         _ => {}
     }

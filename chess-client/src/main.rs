@@ -11,7 +11,7 @@ fn main() {
                 .set(WindowPlugin {
                     primary_window: Some(Window {
                         title: "中国象棋".into(),
-                        resolution: WindowResolution::new(1280.0, 720.0),
+                        resolution: WindowResolution::new(1280, 720),
                         resizable: true,
                         ..default()
                     }),
@@ -35,7 +35,9 @@ fn handle_window_resize(
     windows: Query<&Window>,
     mut layout: ResMut<chess_client::board::BoardLayout>,
 ) {
-    let window = windows.single();
+    let Ok(window) = windows.single() else {
+        return;
+    };
     let new_layout = chess_client::board::BoardLayout::from_window_size(
         window.width(),
         window.height(),

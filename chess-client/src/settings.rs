@@ -3,7 +3,7 @@
 //! 提供设置数据结构、持久化和 Bevy Resource 集成
 
 use bevy::prelude::*;
-use bevy::window::{PresentMode, WindowMode};
+use bevy::window::{MonitorSelection, PresentMode, VideoModeSelection, WindowMode};
 use protocol::Difficulty;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -127,21 +127,21 @@ pub enum Resolution {
 }
 
 impl Resolution {
-    pub fn width(&self) -> f32 {
+    pub fn width(&self) -> u32 {
         match self {
-            Resolution::R1024x768 => 1024.0,
-            Resolution::R1280x720 => 1280.0,
-            Resolution::R1920x1080 => 1920.0,
-            Resolution::R2560x1440 => 2560.0,
+            Resolution::R1024x768 => 1024,
+            Resolution::R1280x720 => 1280,
+            Resolution::R1920x1080 => 1920,
+            Resolution::R2560x1440 => 2560,
         }
     }
 
-    pub fn height(&self) -> f32 {
+    pub fn height(&self) -> u32 {
         match self {
-            Resolution::R1024x768 => 768.0,
-            Resolution::R1280x720 => 720.0,
-            Resolution::R1920x1080 => 1080.0,
-            Resolution::R2560x1440 => 1440.0,
+            Resolution::R1024x768 => 768,
+            Resolution::R1280x720 => 720,
+            Resolution::R1920x1080 => 1080,
+            Resolution::R2560x1440 => 1440,
         }
     }
 
@@ -198,7 +198,7 @@ impl FullscreenMode {
         match self {
             FullscreenMode::Windowed => WindowMode::Windowed,
             FullscreenMode::BorderlessFullscreen => WindowMode::BorderlessFullscreen(MonitorSelection::Current),
-            FullscreenMode::ExclusiveFullscreen => WindowMode::Fullscreen(MonitorSelection::Current),
+            FullscreenMode::ExclusiveFullscreen => WindowMode::Fullscreen(MonitorSelection::Current, VideoModeSelection::Current),
         }
     }
 

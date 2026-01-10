@@ -30,7 +30,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # 游戏引擎 (客户端)
-bevy = "0.15"
+bevy = "0.17"
 
 # 异步 trait
 async-trait = "0.1"

@@ -20,8 +20,8 @@ impl Plugin for NetworkPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(NetworkState::default())
             .insert_resource(NetworkConnectionHandle::default())
-            .add_event::<NetworkEvent>()
-            .add_event::<ServerMessageEvent>()
+            .add_message::<NetworkEvent>()
+            .add_message::<ServerMessageEvent>()
             .add_systems(
                 Update,
                 (
@@ -29,6 +29,7 @@ impl Plugin for NetworkPlugin {
                     handle_server_messages,
                     poll_network,
                     check_quick_match_timeout,
+                    check_lobby_connect_timeout,
                 ),
             );
     }
@@ -77,10 +78,17 @@ pub struct NetworkState {
     pub is_quick_matching: bool,
     /// 快速匹配开始时间（用于超时检测）
     pub quick_match_start: Option<Instant>,
+    /// 连接错误信息
+    pub connection_error: Option<String>,
+    /// 大厅连接开始时间（用于超时检测）
+    pub lobby_connect_start: Option<Instant>,
 }
 
 /// 快速匹配超时时间（秒）
 const QUICK_MATCH_TIMEOUT_SECS: u64 = 10;
+
+/// 大厅连接超时时间（秒）
+const LOBBY_CONNECT_TIMEOUT_SECS: u64 = 10;
 
 /// 连接状态
 #[derive(Default, Clone, Copy, Debug, PartialEq, Eq)]
@@ -93,7 +101,7 @@ pub enum ConnectionStatus {
 }
 
 /// 网络事件（客户端发起）
-#[derive(Event, Clone, Debug)]
+#[derive(Message, Clone, Debug)]
 pub enum NetworkEvent {
     /// 连接服务器
     Connect { addr: String, nickname: String },
@@ -126,12 +134,12 @@ pub enum NetworkEvent {
 }
 
 /// 服务器消息事件（收到服务器消息后触发）
-#[derive(Event, Clone, Debug)]
+#[derive(Message, Clone, Debug)]
 pub struct ServerMessageEvent(pub ServerMessage);
 
 /// 处理网络事件
 fn handle_network_events(
-    mut events: EventReader<NetworkEvent>,
+    mut events: MessageReader<NetworkEvent>,
     mut network: ResMut<NetworkState>,
     conn_handle: Res<NetworkConnectionHandle>,
     mut game_state: ResMut<NextState<GameState>>,
@@ -142,6 +150,8 @@ fn handle_network_events(
                 network.server_addr = addr.clone();
                 network.nickname = nickname.clone();
                 network.status = ConnectionStatus::Connecting;
+                network.connection_error = None;  // 清除之前的错误
+                network.lobby_connect_start = Some(Instant::now());  // 开始计时
                 game_state.set(GameState::Connecting);
                 
                 tracing::info!("Connecting to {} as {}", addr, nickname);
@@ -153,6 +163,7 @@ fn handle_network_events(
                 network.status = ConnectionStatus::Disconnected;
                 network.player_id = None;
                 network.room_id = None;
+                network.lobby_connect_start = None;  // 清除计时器
                 conn_handle.connection.disconnect();
                 game_state.set(GameState::Menu);
             }
@@ -220,7 +231,7 @@ fn handle_network_events(
 
 /// 处理服务器消息
 fn handle_server_messages(
-    mut events: EventReader<ServerMessageEvent>,
+    mut events: MessageReader<ServerMessageEvent>,
     mut game: ResMut<crate::game::ClientGame>,
     mut network: ResMut<NetworkState>,
     mut game_state: ResMut<NextState<GameState>>,
@@ -231,6 +242,8 @@ fn handle_server_messages(
             ServerMessage::LoginSuccess { player_id } => {
                 network.player_id = Some(*player_id);
                 network.status = ConnectionStatus::Connected;
+                network.lobby_connect_start = None;  // 登录成功，清除超时计时器
+                network.connection_error = None;  // 清除错误
                 tracing::info!("Login success: {:?}", player_id);
                 
                 // 执行待处理操作
@@ -356,7 +369,7 @@ fn handle_server_messages(
 /// 轮询网络消息
 fn poll_network(
     conn_handle: Res<NetworkConnectionHandle>,
-    mut server_events: EventWriter<ServerMessageEvent>,
+    mut server_events: MessageWriter<ServerMessageEvent>,
     mut network: ResMut<NetworkState>,
 ) {
     // 从接收队列获取消息
@@ -368,7 +381,7 @@ fn poll_network(
             network.status = ConnectionStatus::Connected;
         }
         
-        server_events.send(ServerMessageEvent(msg));
+        server_events.write(ServerMessageEvent(msg));
     }
 }
 
@@ -393,6 +406,54 @@ fn check_quick_match_timeout(
             // 断开连接并返回主菜单
             conn_handle.connection.disconnect();
             game_state.set(GameState::Menu);
+        }
+    }
+}
+
+/// 检查大厅连接超时
+fn check_lobby_connect_timeout(
+    mut network: ResMut<NetworkState>,
+    conn_handle: Res<NetworkConnectionHandle>,
+    game_state: Res<State<GameState>>,
+    mut next_state: ResMut<NextState<GameState>>,
+) {
+    // 只在 Connecting 或 Lobby 状态下检查
+    if !matches!(game_state.get(), GameState::Connecting | GameState::Lobby) {
+        return;
+    }
+    
+    // 检查连接是否已断开（服务器无法连接）
+    if network.status == ConnectionStatus::Connecting && !conn_handle.connection.is_running() {
+        // 连接任务已结束但状态仍为 Connecting，说明连接失败
+        if network.lobby_connect_start.is_some() {
+            tracing::warn!("Connection failed: server unreachable, returning to menu");
+            
+            network.status = ConnectionStatus::Error;
+            network.connection_error = Some("无法连接到服务器".to_string());
+            network.lobby_connect_start = None;
+            network.is_quick_matching = false;
+            network.quick_match_start = None;
+            
+            // 直接返回主菜单
+            next_state.set(GameState::Menu);
+        }
+        return;
+    }
+    
+    // 检查超时
+    if let Some(start_time) = network.lobby_connect_start {
+        if start_time.elapsed().as_secs() > LOBBY_CONNECT_TIMEOUT_SECS {
+            tracing::warn!("Lobby connection timeout after {} seconds, returning to menu", LOBBY_CONNECT_TIMEOUT_SECS);
+            
+            network.status = ConnectionStatus::Error;
+            network.connection_error = Some("连接超时，请检查网络".to_string());
+            network.lobby_connect_start = None;
+            network.is_quick_matching = false;
+            network.quick_match_start = None;
+            
+            // 断开连接并返回主菜单
+            conn_handle.connection.disconnect();
+            next_state.set(GameState::Menu);
         }
     }
 }

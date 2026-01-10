@@ -40,7 +40,7 @@ impl AiThinkingState {
 }
 
 /// AI 走棋事件
-#[derive(Event, Clone, Debug)]
+#[derive(Message, Clone, Debug)]
 pub struct AiMoveEvent {
     pub from: protocol::Position,
     pub to: protocol::Position,
@@ -52,7 +52,7 @@ pub struct LocalAiPlugin;
 impl Plugin for LocalAiPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(AiThinkingState::default())
-            .add_event::<AiMoveEvent>()
+            .add_message::<AiMoveEvent>()
             .add_systems(
                 Update,
                 (
@@ -141,7 +141,7 @@ fn compute_ai_move(game_state: BoardState, difficulty: Difficulty) -> Option<Mov
 fn poll_ai_result(
     mut commands: Commands,
     mut tasks: Query<(Entity, &mut AiComputeTask)>,
-    mut ai_events: EventWriter<AiMoveEvent>,
+    mut ai_events: MessageWriter<AiMoveEvent>,
     mut thinking_state: ResMut<AiThinkingState>,
     mut game: ResMut<ClientGame>,
     mut game_state: ResMut<NextState<GameState>>,
@@ -190,7 +190,7 @@ fn poll_ai_result(
                 tracing::info!("AI 走棋: {:?} -> {:?}, 耗时: {:?}", mv.from, mv.to, elapsed);
 
                 // 发送 AI 走棋事件
-                ai_events.send(AiMoveEvent {
+                ai_events.write(AiMoveEvent {
                     from: mv.from,
                     to: mv.to,
                 });
@@ -211,7 +211,7 @@ fn poll_ai_result(
 
 /// 处理 AI 走棋事件
 fn handle_ai_move(
-    mut ai_events: EventReader<AiMoveEvent>,
+    mut ai_events: MessageReader<AiMoveEvent>,
     mut game: ResMut<ClientGame>,
     mut game_state: ResMut<NextState<GameState>>,
 ) {

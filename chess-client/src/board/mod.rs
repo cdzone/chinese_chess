@@ -133,7 +133,7 @@ fn setup_board(
 /// 清理棋盘
 fn cleanup_board(mut commands: Commands, query: Query<Entity, With<BoardMarker>>) {
     for entity in query.iter() {
-        commands.entity(entity).despawn_recursive();
+        commands.entity(entity).despawn();
     }
 }
 
@@ -152,7 +152,7 @@ fn update_board_on_layout_change(
 
     // 清除所有棋盘相关实体
     for entity in board_query.iter() {
-        commands.entity(entity).despawn_recursive();
+        commands.entity(entity).despawn();
     }
 
     // 重新生成棋盘
@@ -222,7 +222,7 @@ fn update_pieces(
 
     // 清除旧棋子
     for entity in pieces_query.iter() {
-        commands.entity(entity).despawn_recursive();
+        commands.entity(entity).despawn();
     }
 
     // 生成新棋子
@@ -250,7 +250,7 @@ fn update_highlights(
 
     // 清除旧高亮
     for entity in highlights_query.iter() {
-        commands.entity(entity).despawn_recursive();
+        commands.entity(entity).despawn();
     }
 
     // 生成选中高亮
