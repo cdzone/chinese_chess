@@ -194,8 +194,9 @@ fn handle_button_action(
         ButtonAction::PlayVsAi(difficulty) => {
             // 本地 PvE 模式：完全离线，无需网络
             game.start_local_pve(*difficulty);
-            game.red_time_ms = 600_000; // 10 分钟
-            game.black_time_ms = 600_000;
+            // 本地模式无时间限制（设置为极大值，约 115 天）
+            game.red_time_ms = u64::MAX;
+            game.black_time_ms = u64::MAX;
             game_state.set(GameState::Playing);
             
             tracing::info!("Starting local PvE game with difficulty: {:?}", difficulty);

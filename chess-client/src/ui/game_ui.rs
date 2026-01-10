@@ -147,6 +147,8 @@ fn spawn_move_history(parent: &mut ChildBuilder, asset_server: &AssetServer) {
             Node {
                 flex_direction: FlexDirection::Column,
                 flex_grow: 1.0,
+                flex_shrink: 1.0,  // 允许收缩
+                min_height: Val::Px(50.0),  // 最小高度
                 padding: UiRect::all(Val::Px(10.0)),
                 margin: UiRect::vertical(Val::Px(10.0)),
                 overflow: Overflow::clip_y(),
@@ -187,6 +189,7 @@ fn spawn_game_buttons(parent: &mut ChildBuilder, asset_server: &AssetServer) {
         .spawn(Node {
             flex_direction: FlexDirection::Column,
             align_items: AlignItems::Center,
+            flex_shrink: 0.0,  // 防止按钮区域被压缩
             ..default()
         })
         .with_children(|parent| {
@@ -288,9 +291,15 @@ pub fn update_timer_display(
             game.black_time_ms
         };
 
-        let minutes = time_ms / 60000;
-        let seconds = (time_ms % 60000) / 1000;
-        **text = format!("{:02}:{:02}", minutes, seconds);
+        // 无限时间模式（本地 PvE）显示 "--:--"
+        if time_ms > 24 * 60 * 60 * 1000 {
+            // 超过 24 小时视为无限
+            **text = "--:--".to_string();
+        } else {
+            let minutes = time_ms / 60000;
+            let seconds = (time_ms % 60000) / 1000;
+            **text = format!("{:02}:{:02}", minutes, seconds);
+        }
     }
 }
 
@@ -682,10 +691,10 @@ pub fn handle_game_over_buttons(
                         // 根据之前的游戏模式重新开始
                         match game_mode {
                             Some(crate::game::GameMode::LocalPvE { difficulty }) => {
-                                // 本地 PvE：直接重新开始，无需网络
+                                // 本地 PvE：直接重新开始，无需网络，无时间限制
                                 game.start_local_pve(difficulty);
-                                game.red_time_ms = 600_000;
-                                game.black_time_ms = 600_000;
+                                game.red_time_ms = u64::MAX;
+                                game.black_time_ms = u64::MAX;
                                 game_state.set(GameState::Playing);
                             }
                             Some(crate::game::GameMode::OnlinePvE { difficulty, .. }) => {
