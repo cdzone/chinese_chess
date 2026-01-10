@@ -9,6 +9,9 @@ use crate::network::NetworkEvent;
 use crate::settings::GameSettings;
 use crate::GameState;
 
+/// 主菜单分组标题颜色
+const SECTION_TITLE_COLOR: Color = Color::srgb(0.7, 0.6, 0.5);
+
 /// 设置主菜单
 pub fn setup_menu(mut commands: Commands, asset_server: Res<AssetServer>) {
     // 根容器
@@ -37,70 +40,67 @@ pub fn setup_menu(mut commands: Commands, asset_server: Res<AssetServer>) {
                 },
                 TextColor(Color::srgb(0.9, 0.8, 0.6)),
                 Node {
-                    margin: UiRect::bottom(Val::Px(50.0)),
+                    margin: UiRect::bottom(Val::Px(40.0)),
                     ..default()
                 },
             ));
 
-            // 菜单按钮容器
+            // 主内容区域（水平布局：单机对战 | 在线对战）
             parent
                 .spawn(Node {
-                    flex_direction: FlexDirection::Column,
-                    align_items: AlignItems::Center,
+                    flex_direction: FlexDirection::Row,
+                    justify_content: JustifyContent::Center,
+                    align_items: AlignItems::Start,
+                    column_gap: Val::Px(60.0),
                     ..default()
                 })
                 .with_children(|parent| {
-                    // 人机对战 - 简单
-                    spawn_menu_button(
+                    // 左侧：单机对战
+                    spawn_menu_section(
                         parent,
                         &asset_server,
-                        "人机对战 - 简单",
-                        ButtonAction::PlayVsAi(Difficulty::Easy),
-                    );
-
-                    // 人机对战 - 中等
-                    spawn_menu_button(
-                        parent,
-                        &asset_server,
-                        "人机对战 - 中等",
-                        ButtonAction::PlayVsAi(Difficulty::Medium),
-                    );
-
-                    // 人机对战 - 困难
-                    spawn_menu_button(
-                        parent,
-                        &asset_server,
-                        "人机对战 - 困难",
-                        ButtonAction::PlayVsAi(Difficulty::Hard),
+                        "单机对战",
+                        vec![
+                            ("简单", ButtonAction::PlayVsAi(Difficulty::Easy)),
+                            ("中等", ButtonAction::PlayVsAi(Difficulty::Medium)),
+                            ("困难", ButtonAction::PlayVsAi(Difficulty::Hard)),
+                        ],
                     );
 
                     // 分隔线
                     parent.spawn((
                         Node {
-                            width: Val::Px(200.0),
-                            height: Val::Px(2.0),
-                            margin: UiRect::vertical(Val::Px(20.0)),
+                            width: Val::Px(2.0),
+                            height: Val::Px(200.0),
                             ..default()
                         },
                         BackgroundColor(Color::srgb(0.3, 0.3, 0.3)),
                     ));
 
-                    // 创建房间 (PvP)
-                    spawn_menu_button(
+                    // 右侧：在线对战
+                    spawn_menu_section(
                         parent,
                         &asset_server,
-                        "创建房间",
-                        ButtonAction::CreatePvPRoom,
+                        "在线对战",
+                        vec![
+                            ("快速匹配", ButtonAction::QuickMatch),
+                            ("创建房间", ButtonAction::CreatePvPRoom),
+                            ("加入房间", ButtonAction::JoinRoom),
+                        ],
                     );
+                });
 
-                    // 加入房间
-                    spawn_menu_button(
-                        parent,
-                        &asset_server,
-                        "加入房间",
-                        ButtonAction::JoinRoom,
-                    );
-
+            // 底部按钮区
+            parent
+                .spawn(Node {
+                    flex_direction: FlexDirection::Row,
+                    justify_content: JustifyContent::Center,
+                    align_items: AlignItems::Center,
+                    margin: UiRect::top(Val::Px(40.0)),
+                    column_gap: Val::Px(20.0),
+                    ..default()
+                })
+                .with_children(|parent| {
                     // 加载棋局
                     spawn_menu_button(
                         parent,
@@ -125,6 +125,42 @@ pub fn setup_menu(mut commands: Commands, asset_server: Res<AssetServer>) {
                         ButtonAction::ExitGame,
                     );
                 });
+        });
+}
+
+/// 生成菜单分组
+fn spawn_menu_section(
+    parent: &mut ChildBuilder,
+    asset_server: &AssetServer,
+    title: &str,
+    buttons: Vec<(&str, ButtonAction)>,
+) {
+    parent
+        .spawn(Node {
+            flex_direction: FlexDirection::Column,
+            align_items: AlignItems::Center,
+            ..default()
+        })
+        .with_children(|parent| {
+            // 分组标题
+            parent.spawn((
+                Text::new(title),
+                TextFont {
+                    font: asset_server.load("fonts/SourceHanSansSC-Bold.otf"),
+                    font_size: 28.0,
+                    ..default()
+                },
+                TextColor(SECTION_TITLE_COLOR),
+                Node {
+                    margin: UiRect::bottom(Val::Px(15.0)),
+                    ..default()
+                },
+            ));
+
+            // 按钮
+            for (text, action) in buttons {
+                spawn_menu_button(parent, asset_server, text, action);
+            }
         });
 }
 
@@ -212,6 +248,17 @@ fn handle_button_action(
             game_state.set(GameState::Playing);
             
             tracing::info!("Starting local PvE game with difficulty: {:?}", difficulty);
+        }
+        ButtonAction::QuickMatch => {
+            // 快速匹配：登录后自动加入或创建房间
+            network_state.pending_action = crate::network::PendingAction::QuickMatch;
+            
+            network_events.send(NetworkEvent::Connect {
+                addr: settings.server_address.clone(),
+                nickname: settings.nickname.clone(),
+            });
+            
+            tracing::info!("Quick match requested");
         }
         ButtonAction::CreatePvPRoom => {
             // 设置待处理操作，登录成功后自动创建房间

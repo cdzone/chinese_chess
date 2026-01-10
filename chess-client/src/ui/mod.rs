@@ -5,13 +5,17 @@
 mod menu;
 mod game_ui;
 mod settings_ui;
+mod lobby_ui;
 
 pub use menu::*;
 pub use game_ui::*;
 pub use settings_ui::*;
+pub use lobby_ui::*;
 
 use bevy::prelude::*;
+use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
 
+use crate::settings::GameSettings;
 use crate::GameState;
 
 /// 基准分辨率（UI 设计基准）
@@ -23,12 +27,23 @@ pub struct UiPlugin;
 impl Plugin for UiPlugin {
     fn build(&self, app: &mut App) {
         app
+            // 添加帧率诊断插件
+            .add_plugins(FrameTimeDiagnosticsPlugin::default())
             // UI 缩放系统（全局运行）
-            .add_systems(Update, update_ui_scale)
+            .add_systems(Update, (update_ui_scale, update_fps_display))
+            // 启动时创建 FPS 显示
+            .add_systems(Startup, setup_fps_display)
             // 主菜单
             .add_systems(OnEnter(GameState::Menu), setup_menu)
             .add_systems(OnExit(GameState::Menu), cleanup_menu)
             .add_systems(Update, handle_menu_buttons.run_if(in_state(GameState::Menu)))
+            // 大厅（房间列表）
+            .add_systems(OnEnter(GameState::Lobby), setup_lobby)
+            .add_systems(OnExit(GameState::Lobby), cleanup_lobby)
+            .add_systems(
+                Update,
+                (handle_lobby_buttons, update_room_list).run_if(in_state(GameState::Lobby)),
+            )
             // 设置页面
             .add_systems(OnEnter(GameState::Settings), setup_settings)
             .add_systems(OnExit(GameState::Settings), cleanup_settings)
@@ -49,6 +64,54 @@ impl Plugin for UiPlugin {
             .add_systems(OnEnter(GameState::GameOver), setup_game_over_ui)
             .add_systems(OnExit(GameState::GameOver), cleanup_game_over_ui)
             .add_systems(Update, handle_game_over_buttons.run_if(in_state(GameState::GameOver)));
+    }
+}
+
+/// FPS 显示标记
+#[derive(Component)]
+pub struct FpsDisplay;
+
+/// 创建 FPS 显示 UI
+fn setup_fps_display(mut commands: Commands) {
+    commands.spawn((
+        Text::new("FPS: --"),
+        TextFont {
+            font_size: 16.0,
+            ..default()
+        },
+        TextColor(Color::srgb(0.0, 1.0, 0.0)),
+        Node {
+            position_type: PositionType::Absolute,
+            top: Val::Px(10.0),
+            right: Val::Px(10.0),
+            ..default()
+        },
+        FpsDisplay,
+    ));
+}
+
+/// 更新 FPS 显示
+fn update_fps_display(
+    settings: Res<GameSettings>,
+    diagnostics: Res<DiagnosticsStore>,
+    mut query: Query<(&mut Text, &mut Visibility), With<FpsDisplay>>,
+) {
+    for (mut text, mut visibility) in &mut query {
+        // 根据设置控制显示/隐藏
+        *visibility = if settings.show_fps {
+            Visibility::Visible
+        } else {
+            Visibility::Hidden
+        };
+
+        // 只在可见时更新文本
+        if settings.show_fps {
+            if let Some(fps) = diagnostics.get(&FrameTimeDiagnosticsPlugin::FPS) {
+                if let Some(value) = fps.smoothed() {
+                    **text = format!("FPS: {:.0}", value);
+                }
+            }
+        }
     }
 }
 
@@ -87,6 +150,7 @@ pub enum ButtonAction {
     // 主菜单
     CreatePvPRoom,
     JoinRoom,
+    QuickMatch,
     PlayVsAi(protocol::Difficulty),
     LoadGame,
     Settings,
@@ -100,6 +164,10 @@ pub enum ButtonAction {
     // 游戏结束
     BackToMenu,
     PlayAgain,
+    // 大厅
+    RefreshRooms,
+    BackToMenuFromLobby,
+    JoinRoomById(protocol::RoomId),
 }
 
 /// 通用按钮样式

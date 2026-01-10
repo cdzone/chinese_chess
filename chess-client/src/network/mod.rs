@@ -48,6 +48,8 @@ pub enum PendingAction {
     CreateRoom { room_type: protocol::RoomType, preferred_side: Option<protocol::Side> },
     /// 获取房间列表
     ListRooms,
+    /// 快速匹配（加入第一个可用房间或创建新房间）
+    QuickMatch,
 }
 
 /// 网络状态
@@ -67,6 +69,10 @@ pub struct NetworkState {
     pub pending_action: PendingAction,
     /// 当前房间类型（用于再来一局）
     pub current_room_type: Option<protocol::RoomType>,
+    /// 房间列表（从服务器获取）
+    pub room_list: Vec<protocol::RoomInfo>,
+    /// 是否正在快速匹配
+    pub is_quick_matching: bool,
 }
 
 /// 连接状态
@@ -241,6 +247,13 @@ fn handle_server_messages(
                         conn_handle.connection.queue_send(msg);
                         game_state.set(GameState::Lobby);
                     }
+                    PendingAction::QuickMatch => {
+                        // 快速匹配：先获取房间列表
+                        network.is_quick_matching = true;
+                        let msg = ClientMessage::ListRooms;
+                        conn_handle.connection.queue_send(msg);
+                        tracing::info!("Quick match: fetching room list");
+                    }
                 }
             }
             ServerMessage::RoomCreated { room_id, .. } => {
@@ -289,6 +302,37 @@ fn handle_server_messages(
             }
             ServerMessage::GameResumed => {
                 game.is_paused = false;
+            }
+            ServerMessage::RoomList { rooms } => {
+                tracing::info!("Received room list: {} rooms", rooms.len());
+                network.room_list = rooms.clone();
+                
+                // 如果正在快速匹配，自动加入或创建房间
+                if network.is_quick_matching {
+                    network.is_quick_matching = false;
+                    
+                    // 查找等待中的 PvP 房间
+                    let waiting_room = rooms.iter().find(|r| {
+                        matches!(r.room_type, protocol::RoomType::PvP) && 
+                        r.state == protocol::RoomState::Waiting
+                    });
+                    
+                    if let Some(room) = waiting_room {
+                        // 加入已有房间
+                        let msg = ClientMessage::JoinRoom { room_id: room.id };
+                        conn_handle.connection.queue_send(msg);
+                        tracing::info!("Quick match: joining room {:?}", room.id);
+                    } else {
+                        // 没有可用房间，创建新房间
+                        network.current_room_type = Some(protocol::RoomType::PvP);
+                        let msg = ClientMessage::CreateRoom {
+                            room_type: protocol::RoomType::PvP,
+                            preferred_side: None,
+                        };
+                        conn_handle.connection.queue_send(msg);
+                        tracing::info!("Quick match: creating new room");
+                    }
+                }
             }
             ServerMessage::Error { code, message } => {
                 tracing::error!("Server error {:?}: {}", code, message);
