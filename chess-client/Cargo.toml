@@ -5,6 +5,7 @@ edition.workspace = true
 
 [dependencies]
 protocol = { workspace = true }
+chess-ai = { path = "../chess-ai" }
 bevy = { workspace = true }
 tokio = { workspace = true }
 serde = { workspace = true }

@@ -1,7 +1,7 @@
 //! 主菜单 UI
 
 use bevy::prelude::*;
-use protocol::{BoardState, Difficulty, RoomType, Side};
+use protocol::Difficulty;
 
 use super::{ButtonAction, MenuMarker, UiMarker, button_style, NORMAL_BUTTON, HOVERED_BUTTON, PRESSED_BUTTON};
 use crate::game::ClientGame;
@@ -192,24 +192,13 @@ fn handle_button_action(
 ) {
     match action {
         ButtonAction::PlayVsAi(difficulty) => {
-            // 本地模式：直接初始化游戏状态
-            let initial_state = BoardState::initial();
-            game.start_game(initial_state, Side::Red, RoomType::PvE(*difficulty));
+            // 本地 PvE 模式：完全离线，无需网络
+            game.start_local_pve(*difficulty);
             game.red_time_ms = 600_000; // 10 分钟
             game.black_time_ms = 600_000;
             game_state.set(GameState::Playing);
             
-            // 设置待处理操作，登录成功后自动创建房间
-            network_state.pending_action = crate::network::PendingAction::CreateRoom {
-                room_type: protocol::RoomType::PvE(*difficulty),
-                preferred_side: Some(protocol::Side::Red),
-            };
-            
-            // 连接服务器（后台）
-            network_events.send(NetworkEvent::Connect {
-                addr: "127.0.0.1:9527".to_string(),
-                nickname: "玩家".to_string(),
-            });
+            tracing::info!("Starting local PvE game with difficulty: {:?}", difficulty);
         }
         ButtonAction::CreatePvPRoom => {
             // 设置待处理操作，登录成功后自动创建房间

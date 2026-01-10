@@ -253,9 +253,18 @@ fn handle_server_messages(
                 tracing::info!("Joined room {:?} as {:?}", room_id, side);
             }
             ServerMessage::GameStarted { initial_state, your_side, .. } => {
-                // 使用保存的房间类型
+                // 将 RoomType 转换为 GameMode
                 let room_type = network.current_room_type.clone().unwrap_or(protocol::RoomType::PvP);
-                game.start_game(initial_state.clone(), *your_side, room_type);
+                let room_id = network.room_id.unwrap_or(0);
+                let game_mode = match room_type {
+                    protocol::RoomType::PvE(difficulty) => {
+                        crate::game::GameMode::OnlinePvE { room_id, difficulty }
+                    }
+                    protocol::RoomType::PvP => {
+                        crate::game::GameMode::OnlinePvP { room_id }
+                    }
+                };
+                game.start_game(initial_state.clone(), *your_side, game_mode);
                 game_state.set(GameState::Playing);
                 tracing::info!("Game started!");
             }

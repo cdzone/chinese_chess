@@ -3,7 +3,7 @@
 use bevy::prelude::*;
 
 use super::{ButtonAction, GameUiMarker, UiMarker, NORMAL_BUTTON, HOVERED_BUTTON, PRESSED_BUTTON};
-use crate::game::{ClientGame, GameEvent};
+use crate::game::{AiThinkingState, ClientGame, GameEvent};
 use crate::network::NetworkEvent;
 use crate::GameState;
 
@@ -20,6 +20,10 @@ pub struct MoveHistoryDisplay;
 /// 暂停按钮文字标记
 #[derive(Component)]
 pub struct PauseButtonText;
+
+/// AI 思考指示器标记
+#[derive(Component)]
+pub struct AiThinkingIndicator;
 
 /// 设置游戏 UI
 pub fn setup_game_ui(mut commands: Commands, asset_server: Res<AssetServer>) {
@@ -52,6 +56,48 @@ pub fn setup_game_ui(mut commands: Commands, asset_server: Res<AssetServer>) {
 
             // 按钮区
             spawn_game_buttons(parent, &asset_server);
+        });
+
+    // AI 思考指示器（棋盘中央）
+    // P2 修复：使用 flexbox 居中而不是 left/top 百分比
+    commands
+        .spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                width: Val::Percent(100.0),
+                height: Val::Percent(100.0),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                ..default()
+            },
+            Visibility::Hidden,
+            UiMarker,
+            GameUiMarker,
+            AiThinkingIndicator,
+        ))
+        .with_children(|parent| {
+            parent
+                .spawn((
+                    Node {
+                        padding: UiRect::all(Val::Px(20.0)),
+                        justify_content: JustifyContent::Center,
+                        align_items: AlignItems::Center,
+                        ..default()
+                    },
+                    BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.8)),
+                    BorderRadius::all(Val::Px(8.0)),
+                ))
+                .with_children(|inner| {
+                    inner.spawn((
+                        Text::new("AI 思考中..."),
+                        TextFont {
+                            font: asset_server.load("fonts/SourceHanSansSC-Bold.otf"),
+                            font_size: 28.0,
+                            ..default()
+                        },
+                        TextColor(Color::srgb(1.0, 0.9, 0.3)),
+                    ));
+                });
         });
 }
 
@@ -359,6 +405,20 @@ pub fn handle_game_buttons(
     }
 }
 
+/// 更新 AI 思考指示器
+pub fn update_ai_thinking_indicator(
+    thinking_state: Res<AiThinkingState>,
+    mut query: Query<&mut Visibility, With<AiThinkingIndicator>>,
+) {
+    for mut visibility in &mut query {
+        *visibility = if thinking_state.is_thinking {
+            Visibility::Visible
+        } else {
+            Visibility::Hidden
+        };
+    }
+}
+
 /// 设置游戏结束 UI
 pub fn setup_game_over_ui(
     mut commands: Commands,
@@ -610,30 +670,45 @@ pub fn handle_game_over_buttons(
                     }
                     ButtonAction::PlayAgain => {
                         tracing::info!("Play again clicked");
-                        // 保存之前的房间类型
-                        let room_type = game.room_type.clone();
-                        // 断开旧连接
-                        conn_handle.connection.disconnect();
+                        // 保存之前的游戏模式
+                        let game_mode = game.game_mode.clone();
+                        // 断开旧连接（如果是在线模式）
+                        if game_mode.as_ref().map_or(false, |m| m.is_online()) {
+                            conn_handle.connection.disconnect();
+                        }
                         // 重置游戏状态
                         game.reset();
                         
-                        // 根据之前的房间类型重新开始
-                        if let Some(protocol::RoomType::PvE(difficulty)) = room_type {
-                            // 重新开始 PvE 游戏
-                            let initial_state = protocol::BoardState::initial();
-                            game.start_game(initial_state, protocol::Side::Red, protocol::RoomType::PvE(difficulty));
-                            game.red_time_ms = 600_000;
-                            game.black_time_ms = 600_000;
-                            game_state.set(GameState::Playing);
-                            
-                            // 重新连接服务器
-                            network_events.send(NetworkEvent::Connect {
-                                addr: "127.0.0.1:9527".to_string(),
-                                nickname: "玩家".to_string(),
-                            });
-                        } else {
-                            // PvP 模式返回主菜单
-                            game_state.set(GameState::Menu);
+                        // 根据之前的游戏模式重新开始
+                        match game_mode {
+                            Some(crate::game::GameMode::LocalPvE { difficulty }) => {
+                                // 本地 PvE：直接重新开始，无需网络
+                                game.start_local_pve(difficulty);
+                                game.red_time_ms = 600_000;
+                                game.black_time_ms = 600_000;
+                                game_state.set(GameState::Playing);
+                            }
+                            Some(crate::game::GameMode::OnlinePvE { difficulty, .. }) => {
+                                // 在线 PvE：重新连接服务器
+                                let initial_state = protocol::BoardState::initial();
+                                game.start_game(
+                                    initial_state,
+                                    protocol::Side::Red,
+                                    crate::game::GameMode::OnlinePvE { room_id: 0, difficulty },
+                                );
+                                game.red_time_ms = 600_000;
+                                game.black_time_ms = 600_000;
+                                game_state.set(GameState::Playing);
+                                
+                                network_events.send(NetworkEvent::Connect {
+                                    addr: "127.0.0.1:9527".to_string(),
+                                    nickname: "玩家".to_string(),
+                                });
+                            }
+                            _ => {
+                                // PvP 模式返回主菜单
+                                game_state.set(GameState::Menu);
+                            }
                         }
                     }
                     _ => {}
