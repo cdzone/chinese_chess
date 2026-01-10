@@ -163,9 +163,15 @@ fn update_local_timer(
     mut game: ResMut<ClientGame>,
     time: Res<Time>,
     mut game_state: ResMut<NextState<GameState>>,
+    settings: Res<crate::settings::GameSettings>,
 ) {
     // 只在本地模式、非暂停、游戏进行中时更新
     if !game.is_local() || game.is_paused || game.game_result.is_some() {
+        return;
+    }
+
+    // 如果时间限制是无限制，不更新计时器
+    if settings.time_limit == crate::settings::TimeLimit::Unlimited {
         return;
     }
 

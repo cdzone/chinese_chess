@@ -6,6 +6,7 @@ use protocol::Difficulty;
 use super::{ButtonAction, MenuMarker, UiMarker, button_style, NORMAL_BUTTON, HOVERED_BUTTON, PRESSED_BUTTON};
 use crate::game::ClientGame;
 use crate::network::NetworkEvent;
+use crate::settings::GameSettings;
 use crate::GameState;
 
 /// 设置主菜单
@@ -108,6 +109,14 @@ pub fn setup_menu(mut commands: Commands, asset_server: Res<AssetServer>) {
                         ButtonAction::LoadGame,
                     );
 
+                    // 设置
+                    spawn_menu_button(
+                        parent,
+                        &asset_server,
+                        "设置",
+                        ButtonAction::Settings,
+                    );
+
                     // 退出游戏
                     spawn_menu_button(
                         parent,
@@ -164,12 +173,13 @@ pub fn handle_menu_buttons(
     mut game: ResMut<ClientGame>,
     mut exit: EventWriter<AppExit>,
     mut network_state: ResMut<crate::network::NetworkState>,
+    settings: Res<GameSettings>,
 ) {
     for (interaction, mut color, action) in &mut interaction_query {
         match *interaction {
             Interaction::Pressed => {
                 *color = PRESSED_BUTTON.into();
-                handle_button_action(action, &mut network_events, &mut game_state, &mut game, &mut exit, &mut network_state);
+                handle_button_action(action, &mut network_events, &mut game_state, &mut game, &mut exit, &mut network_state, &settings);
             }
             Interaction::Hovered => {
                 *color = HOVERED_BUTTON.into();
@@ -189,14 +199,16 @@ fn handle_button_action(
     game: &mut ResMut<ClientGame>,
     exit: &mut EventWriter<AppExit>,
     network_state: &mut ResMut<crate::network::NetworkState>,
+    settings: &GameSettings,
 ) {
     match action {
         ButtonAction::PlayVsAi(difficulty) => {
             // 本地 PvE 模式：完全离线，无需网络
             game.start_local_pve(*difficulty);
-            // 本地模式无时间限制（设置为极大值，约 115 天）
-            game.red_time_ms = u64::MAX;
-            game.black_time_ms = u64::MAX;
+            // 使用设置中的时间限制
+            let time_ms = settings.time_limit.to_millis();
+            game.red_time_ms = time_ms;
+            game.black_time_ms = time_ms;
             game_state.set(GameState::Playing);
             
             tracing::info!("Starting local PvE game with difficulty: {:?}", difficulty);
@@ -208,24 +220,29 @@ fn handle_button_action(
                 preferred_side: None,
             };
             
+            // 使用设置中的服务器地址和昵称
             network_events.send(NetworkEvent::Connect {
-                addr: "127.0.0.1:9527".to_string(),
-                nickname: "玩家".to_string(),
+                addr: settings.server_address.clone(),
+                nickname: settings.nickname.clone(),
             });
         }
         ButtonAction::JoinRoom => {
             // 设置待处理操作，登录成功后自动获取房间列表
             network_state.pending_action = crate::network::PendingAction::ListRooms;
             
+            // 使用设置中的服务器地址和昵称
             network_events.send(NetworkEvent::Connect {
-                addr: "127.0.0.1:9527".to_string(),
-                nickname: "玩家".to_string(),
+                addr: settings.server_address.clone(),
+                nickname: settings.nickname.clone(),
             });
             game_state.set(GameState::Lobby);
         }
         ButtonAction::LoadGame => {
             // TODO: 显示加载棋局界面
             tracing::info!("Load game clicked");
+        }
+        ButtonAction::Settings => {
+            game_state.set(GameState::Settings);
         }
         ButtonAction::ExitGame => {
             exit.send(AppExit::Success);

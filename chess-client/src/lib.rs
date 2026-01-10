@@ -5,10 +5,13 @@
 pub mod board;
 pub mod game;
 pub mod network;
+pub mod settings;
 pub mod theme;
 pub mod ui;
 
 use bevy::prelude::*;
+
+pub use settings::GameSettings;
 
 /// 游戏状态
 #[derive(Debug, Clone, Copy, Default, Eq, PartialEq, Hash, States)]
@@ -16,6 +19,8 @@ pub enum GameState {
     /// 主菜单
     #[default]
     Menu,
+    /// 设置页面
+    Settings,
     /// 连接服务器
     Connecting,
     /// 房间列表/等待
@@ -33,6 +38,7 @@ impl Plugin for ChessClientPlugin {
     fn build(&self, app: &mut App) {
         app.init_state::<GameState>()
             .add_plugins((
+                settings::SettingsPlugin,
                 theme::ThemePlugin,
                 board::BoardPlugin,
                 game::GamePlugin,

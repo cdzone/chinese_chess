@@ -662,6 +662,7 @@ pub fn handle_game_over_buttons(
     mut game: ResMut<ClientGame>,
     mut network_events: EventWriter<NetworkEvent>,
     conn_handle: Res<crate::network::NetworkConnectionHandle>,
+    settings: Res<crate::settings::GameSettings>,
 ) {
     for (interaction, mut color, action) in &mut interaction_query {
         match *interaction {
@@ -691,10 +692,11 @@ pub fn handle_game_over_buttons(
                         // 根据之前的游戏模式重新开始
                         match game_mode {
                             Some(crate::game::GameMode::LocalPvE { difficulty }) => {
-                                // 本地 PvE：直接重新开始，无需网络，无时间限制
+                                // 本地 PvE：直接重新开始，使用设置中的时间限制
                                 game.start_local_pve(difficulty);
-                                game.red_time_ms = u64::MAX;
-                                game.black_time_ms = u64::MAX;
+                                let time_ms = settings.time_limit.to_millis();
+                                game.red_time_ms = time_ms;
+                                game.black_time_ms = time_ms;
                                 game_state.set(GameState::Playing);
                             }
                             Some(crate::game::GameMode::OnlinePvE { difficulty, .. }) => {
@@ -709,9 +711,10 @@ pub fn handle_game_over_buttons(
                                 game.black_time_ms = 600_000;
                                 game_state.set(GameState::Playing);
                                 
+                                // 使用设置中的服务器地址和昵称
                                 network_events.send(NetworkEvent::Connect {
-                                    addr: "127.0.0.1:9527".to_string(),
-                                    nickname: "玩家".to_string(),
+                                    addr: settings.server_address.clone(),
+                                    nickname: settings.nickname.clone(),
                                 });
                             }
                             _ => {

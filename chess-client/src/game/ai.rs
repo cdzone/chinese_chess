@@ -9,10 +9,8 @@ use protocol::{BoardState, Difficulty, Move, Notation};
 use std::time::{Duration, Instant};
 
 use super::{ClientGame, GameMode};
+use crate::settings::GameSettings;
 use crate::GameState;
-
-/// AI 计算超时时间（秒）
-const AI_TIMEOUT_SECS: u64 = 10;
 
 /// AI 计算任务组件
 #[derive(Component)]
@@ -147,11 +145,14 @@ fn poll_ai_result(
     mut thinking_state: ResMut<AiThinkingState>,
     mut game: ResMut<ClientGame>,
     mut game_state: ResMut<NextState<GameState>>,
+    settings: Res<GameSettings>,
 ) {
+    let ai_timeout_secs = settings.ai_timeout_secs as u64;
+    
     for (entity, mut task_component) in &mut tasks {
-        // P2: 检查超时保护（10秒后强制终止）
-        if task_component.started_at.elapsed() > Duration::from_secs(AI_TIMEOUT_SECS) {
-            tracing::error!("AI 计算超时（>{}秒），强制终止", AI_TIMEOUT_SECS);
+        // P2: 检查超时保护
+        if task_component.started_at.elapsed() > Duration::from_secs(ai_timeout_secs) {
+            tracing::error!("AI 计算超时（>{}秒），强制终止", ai_timeout_secs);
 
             // 设置 AI 失败结果（玩家获胜）
             let result = protocol::GameResult::RedWin(protocol::WinReason::Timeout);

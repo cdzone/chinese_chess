@@ -4,9 +4,11 @@
 
 mod menu;
 mod game_ui;
+mod settings_ui;
 
 pub use menu::*;
 pub use game_ui::*;
+pub use settings_ui::*;
 
 use bevy::prelude::*;
 
@@ -22,6 +24,14 @@ impl Plugin for UiPlugin {
             .add_systems(OnEnter(GameState::Menu), setup_menu)
             .add_systems(OnExit(GameState::Menu), cleanup_menu)
             .add_systems(Update, handle_menu_buttons.run_if(in_state(GameState::Menu)))
+            // 设置页面
+            .add_systems(OnEnter(GameState::Settings), setup_settings)
+            .add_systems(OnExit(GameState::Settings), cleanup_settings)
+            .add_systems(
+                Update,
+                (handle_settings_buttons, update_settings_display, update_tab_content, update_tab_buttons)
+                    .run_if(in_state(GameState::Settings)),
+            )
             // 游戏 UI
             .add_systems(OnEnter(GameState::Playing), setup_game_ui)
             .add_systems(OnExit(GameState::Playing), cleanup_game_ui)
@@ -57,6 +67,7 @@ pub enum ButtonAction {
     JoinRoom,
     PlayVsAi(protocol::Difficulty),
     LoadGame,
+    Settings,
     ExitGame,
     // 游戏中
     Undo,
