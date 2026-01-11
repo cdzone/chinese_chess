@@ -137,6 +137,7 @@ impl Notation {
 mod tests {
     use super::*;
     use crate::board::Board;
+    use crate::piece::{Piece, PieceType};
 
     #[test]
     fn test_cannon_notation() {
@@ -201,5 +202,205 @@ mod tests {
         assert_eq!(Notation::column_notation(0, Side::Black), '1');
         assert_eq!(Notation::column_notation(4, Side::Black), '5');
         assert_eq!(Notation::column_notation(8, Side::Black), '9');
+    }
+
+    #[test]
+    fn test_rook_retreat() {
+        // 车退走法
+        let mut board = Board::empty();
+        board.set(
+            Position::new_unchecked(0, 5),
+            Some(Piece::new(PieceType::Rook, Side::Red)),
+        );
+
+        // 车九退三
+        let mv = Move::new(
+            Position::new_unchecked(0, 5),
+            Position::new_unchecked(0, 2),
+        );
+        let notation = Notation::to_chinese(&board, &mv).unwrap();
+        assert_eq!(notation, "俥九退三");
+    }
+
+    #[test]
+    fn test_advisor_diagonal() {
+        // 士斜走
+        let mut board = Board::empty();
+        board.set(
+            Position::new_unchecked(4, 1),
+            Some(Piece::new(PieceType::Advisor, Side::Red)),
+        );
+
+        // 仕五进四
+        let mv = Move::new(
+            Position::new_unchecked(4, 1),
+            Position::new_unchecked(3, 2),
+        );
+        let notation = Notation::to_chinese(&board, &mv).unwrap();
+        assert_eq!(notation, "仕五進六");
+    }
+
+    #[test]
+    fn test_bishop_diagonal() {
+        // 象斜走
+        let mut board = Board::empty();
+        board.set(
+            Position::new_unchecked(2, 0),
+            Some(Piece::new(PieceType::Bishop, Side::Red)),
+        );
+
+        // 相七进五
+        let mv = Move::new(
+            Position::new_unchecked(2, 0),
+            Position::new_unchecked(4, 2),
+        );
+        let notation = Notation::to_chinese(&board, &mv).unwrap();
+        assert_eq!(notation, "相七進五");
+    }
+
+    #[test]
+    fn test_disambiguation_two_pieces() {
+        // 同列两个兵
+        let mut board = Board::empty();
+        board.set(
+            Position::new_unchecked(4, 5),
+            Some(Piece::new(PieceType::Pawn, Side::Red)),
+        );
+        board.set(
+            Position::new_unchecked(4, 6),
+            Some(Piece::new(PieceType::Pawn, Side::Red)),
+        );
+
+        // 前兵进一
+        let mv = Move::new(
+            Position::new_unchecked(4, 6),
+            Position::new_unchecked(4, 7),
+        );
+        let notation = Notation::to_chinese_with_disambiguation(&board, &mv).unwrap();
+        assert_eq!(notation, "前兵進一");
+
+        // 后兵进一
+        let mv2 = Move::new(
+            Position::new_unchecked(4, 5),
+            Position::new_unchecked(4, 6),
+        );
+        let notation2 = Notation::to_chinese_with_disambiguation(&board, &mv2).unwrap();
+        assert_eq!(notation2, "後兵進一");
+    }
+
+    #[test]
+    fn test_disambiguation_three_pieces() {
+        // 同列三个兵
+        let mut board = Board::empty();
+        board.set(
+            Position::new_unchecked(4, 5),
+            Some(Piece::new(PieceType::Pawn, Side::Red)),
+        );
+        board.set(
+            Position::new_unchecked(4, 6),
+            Some(Piece::new(PieceType::Pawn, Side::Red)),
+        );
+        board.set(
+            Position::new_unchecked(4, 7),
+            Some(Piece::new(PieceType::Pawn, Side::Red)),
+        );
+
+        // 中兵进一
+        let mv = Move::new(
+            Position::new_unchecked(4, 6),
+            Position::new_unchecked(4, 7),
+        );
+        let notation = Notation::to_chinese_with_disambiguation(&board, &mv).unwrap();
+        assert_eq!(notation, "中兵進一");
+    }
+
+    #[test]
+    fn test_black_rook_advance() {
+        // 黑车进
+        let mut board = Board::empty();
+        board.set(
+            Position::new_unchecked(0, 9),
+            Some(Piece::new(PieceType::Rook, Side::Black)),
+        );
+
+        // 車1進5
+        let mv = Move::new(
+            Position::new_unchecked(0, 9),
+            Position::new_unchecked(0, 4),
+        );
+        let notation = Notation::to_chinese(&board, &mv).unwrap();
+        assert_eq!(notation, "車1進5");
+    }
+
+    #[test]
+    fn test_black_cannon_horizontal() {
+        // 黑炮平移
+        let mut board = Board::empty();
+        board.set(
+            Position::new_unchecked(1, 7),
+            Some(Piece::new(PieceType::Cannon, Side::Black)),
+        );
+
+        // 砲2平5
+        let mv = Move::new(
+            Position::new_unchecked(1, 7),
+            Position::new_unchecked(4, 7),
+        );
+        let notation = Notation::to_chinese(&board, &mv).unwrap();
+        assert_eq!(notation, "砲2平5");
+    }
+
+    #[test]
+    fn test_no_disambiguation_needed() {
+        // 只有一个棋子，不需要消歧义
+        let mut board = Board::empty();
+        board.set(
+            Position::new_unchecked(4, 5),
+            Some(Piece::new(PieceType::Pawn, Side::Red)),
+        );
+
+        let mv = Move::new(
+            Position::new_unchecked(4, 5),
+            Position::new_unchecked(4, 6),
+        );
+        let notation = Notation::to_chinese_with_disambiguation(&board, &mv).unwrap();
+        // 应该返回普通表示法
+        assert_eq!(notation, "兵五進一");
+    }
+
+    #[test]
+    fn test_black_knight_retreat() {
+        // 黑马退
+        let mut board = Board::empty();
+        board.set(
+            Position::new_unchecked(2, 7),
+            Some(Piece::new(PieceType::Knight, Side::Black)),
+        );
+
+        // 馬3退2
+        let mv = Move::new(
+            Position::new_unchecked(2, 7),
+            Position::new_unchecked(1, 9),
+        );
+        let notation = Notation::to_chinese(&board, &mv).unwrap();
+        assert_eq!(notation, "馬3退2");
+    }
+
+    #[test]
+    fn test_pawn_horizontal_after_river() {
+        // 过河兵横走
+        let mut board = Board::empty();
+        board.set(
+            Position::new_unchecked(4, 6),
+            Some(Piece::new(PieceType::Pawn, Side::Red)),
+        );
+
+        // 兵五平六
+        let mv = Move::new(
+            Position::new_unchecked(4, 6),
+            Position::new_unchecked(3, 6),
+        );
+        let notation = Notation::to_chinese(&board, &mv).unwrap();
+        assert_eq!(notation, "兵五平六");
     }
 }

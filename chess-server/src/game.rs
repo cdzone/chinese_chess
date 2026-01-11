@@ -175,8 +175,8 @@ mod tests {
     fn test_timer_switch() {
         let mut timer = GameTimer::new();
         
-        // 等待一小段时间
-        thread::sleep(Duration::from_millis(50));
+        // 等待足够长时间以确保时间变化可测量（避免高负载系统上的 flaky）
+        thread::sleep(Duration::from_millis(200));
         
         // 红方时间应该减少
         let red_time = timer.red_time_ms();
@@ -188,7 +188,7 @@ mod tests {
         
         // 红方时间固定
         let red_time_after = timer.red_time_ms();
-        thread::sleep(Duration::from_millis(10));
+        thread::sleep(Duration::from_millis(100));
         assert_eq!(timer.red_time_ms(), red_time_after);
     }
 
@@ -196,17 +196,17 @@ mod tests {
     fn test_timer_pause_resume() {
         let mut timer = GameTimer::new();
         
-        thread::sleep(Duration::from_millis(50));
+        thread::sleep(Duration::from_millis(200));
         timer.pause();
         
         let time_at_pause = timer.red_time_ms();
-        thread::sleep(Duration::from_millis(50));
+        thread::sleep(Duration::from_millis(200));
         
         // 暂停期间时间不变
         assert_eq!(timer.red_time_ms(), time_at_pause);
         
         timer.resume();
-        thread::sleep(Duration::from_millis(50));
+        thread::sleep(Duration::from_millis(200));
         
         // 恢复后时间继续减少
         assert!(timer.red_time_ms() < time_at_pause);

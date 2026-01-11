@@ -110,7 +110,7 @@ impl StorageManager {
                                         // 使用文件修改时间作为后备
                                         entry.metadata()
                                             .and_then(|m| m.modified())
-                                            .map(|t| DateTime::from(t))
+                                            .map(DateTime::from)
                                             .unwrap_or_else(|_| Utc::now())
                                     }),
                                 move_count: record.moves.len(),

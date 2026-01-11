@@ -179,15 +179,14 @@ impl AiEngine {
         }
 
         // Easy 难度：30% 概率选择次优解
-        if self.config.difficulty == Difficulty::Easy {
-            if rand::random::<f32>() < 0.3 {
+        if self.config.difficulty == Difficulty::Easy
+            && rand::random::<f32>() < 0.3 {
                 // 随机选择一个走法
                 let mut rng = rand::thread_rng();
                 if let Some(random_move) = moves.choose(&mut rng) {
                     return Some(*random_move);
                 }
             }
-        }
 
         Some(best_move)
     }
@@ -387,6 +386,7 @@ impl AiEngine {
 mod tests {
     use super::*;
     use protocol::Fen;
+    use std::time::Instant;
 
     #[test]
     fn test_search_initial_position() {
@@ -444,5 +444,157 @@ mod tests {
         assert!(stats.used > 0, "置换表应该有条目");
         println!("TT stats: {:?}", stats);
         println!("Hit rate: {:.2}%", stats.hit_rate() * 100.0);
+    }
+
+    #[test]
+    fn test_easy_performance() {
+        // Easy 难度应该在 1 秒内返回
+        let state = BoardState::initial();
+        let mut engine = AiEngine::from_difficulty(Difficulty::Easy);
+
+        let start = Instant::now();
+        let mv = engine.search(&state);
+        let elapsed = start.elapsed();
+
+        assert!(mv.is_some(), "Easy AI 应该返回走法");
+        assert!(
+            elapsed.as_millis() < 2000,
+            "Easy AI 应该在 2 秒内返回，实际: {:?}",
+            elapsed
+        );
+        println!("Easy AI 耗时: {:?}, 节点: {}", elapsed, engine.nodes_searched());
+    }
+
+    #[test]
+    fn test_medium_performance() {
+        // Medium 难度应该在 3 秒内返回
+        let state = BoardState::initial();
+        let mut engine = AiEngine::from_difficulty(Difficulty::Medium);
+
+        let start = Instant::now();
+        let mv = engine.search(&state);
+        let elapsed = start.elapsed();
+
+        assert!(mv.is_some(), "Medium AI 应该返回走法");
+        assert!(
+            elapsed.as_millis() < 5000,
+            "Medium AI 应该在 5 秒内返回，实际: {:?}",
+            elapsed
+        );
+        println!("Medium AI 耗时: {:?}, 节点: {}", elapsed, engine.nodes_searched());
+    }
+
+    #[test]
+    fn test_search_returns_legal_move() {
+        // AI 返回的走法必须是合法的
+        let state = BoardState::initial();
+        let mut engine = AiEngine::from_difficulty(Difficulty::Easy);
+
+        let mv = engine.search(&state).unwrap();
+        
+        // 验证走法合法
+        let legal_moves = protocol::MoveGenerator::generate_legal(&state);
+        let is_legal = legal_moves.iter().any(|m| m.from == mv.from && m.to == mv.to);
+        assert!(is_legal, "AI 返回的走法必须合法: {:?}", mv);
+    }
+
+    #[test]
+    fn test_search_different_positions() {
+        // 测试不同局面的搜索
+        let positions = [
+            "rnbakabnr/9/1c5c1/p1p1p1p1p/9/9/P1P1P1P1P/1C5C1/9/RNBAKABNR w 0 1", // 初始
+            "rnbakabnr/9/1c5c1/p1p1p1p1p/9/9/P1P1P1P1P/1C2C4/9/RNBAKABNR b 0 1", // 炮二平五后
+            "r1bakabnr/9/1cn4c1/p1p1p1p1p/9/9/P1P1P1P1P/1C5C1/9/RNBAKABNR w 0 1", // 马8进7后
+        ];
+
+        for fen in positions {
+            let state = Fen::parse(fen).unwrap();
+            let mut engine = AiEngine::from_difficulty(Difficulty::Easy);
+            
+            let mv = engine.search(&state);
+            assert!(mv.is_some(), "AI 应该能找到走法: {}", fen);
+        }
+    }
+
+    #[test]
+    fn test_search_endgame() {
+        // 残局测试
+        let fen = "4k4/9/9/9/9/9/9/9/4R4/4K4 w 0 1";
+        let state = Fen::parse(fen).unwrap();
+        let mut engine = AiEngine::from_difficulty(Difficulty::Medium);
+
+        let mv = engine.search(&state);
+        assert!(mv.is_some(), "残局应该能找到走法");
+    }
+
+    #[test]
+    fn test_alpha_beta_pruning() {
+        // 验证 Alpha-Beta 剪枝有效
+        let state = BoardState::initial();
+        
+        // 使用较深的搜索
+        let mut engine = AiEngine::from_difficulty(Difficulty::Medium);
+        let _ = engine.search(&state);
+        let nodes_with_pruning = engine.nodes_searched();
+
+        // Alpha-Beta 应该比完全搜索快很多
+        // 对于深度 4，完全搜索可能需要数百万节点
+        // Alpha-Beta 应该只需要几万到几十万节点
+        println!("Alpha-Beta 搜索节点数: {}", nodes_with_pruning);
+        assert!(
+            nodes_with_pruning < 1_000_000,
+            "Alpha-Beta 剪枝应该有效，节点数: {}",
+            nodes_with_pruning
+        );
+    }
+
+    #[test]
+    fn test_iterative_deepening() {
+        // 测试迭代加深
+        let state = BoardState::initial();
+        let mut engine = AiEngine::from_difficulty(Difficulty::Medium);
+
+        // 迭代加深应该总是返回一个走法
+        let mv = engine.search(&state);
+        assert!(mv.is_some(), "迭代加深应该返回走法");
+    }
+
+    #[test]
+    fn test_tt_improves_performance() {
+        // 测试置换表对性能的提升
+        let state = BoardState::initial();
+        
+        // 第一次搜索
+        let mut engine = AiEngine::from_difficulty(Difficulty::Medium);
+        let _ = engine.search(&state);
+        let stats1 = engine.tt_stats();
+        
+        // 相同局面第二次搜索应该更快（命中置换表）
+        let _ = engine.search(&state);
+        let stats2 = engine.tt_stats();
+        
+        println!("第一次 TT 命中: {}, 第二次 TT 命中: {}", stats1.hits, stats2.hits);
+        // 第二次搜索应该有严格更多的命中（置换表复用）
+        assert!(stats2.hits > stats1.hits, "第二次搜索应该有更多 TT 命中");
+        // 验证置换表显著提升：增量 >50 或倍数 >3（适应 debug/release 不同表现）
+        let delta = stats2.hits - stats1.hits;
+        let ratio = stats2.hits as f64 / stats1.hits.max(1) as f64;
+        assert!(
+            delta > 50 || ratio > 3.0,
+            "TT 命中应显著增加: 增量={}, 倍数={:.1}",
+            delta, ratio
+        );
+    }
+
+    #[test]
+    fn test_clear_tt() {
+        let state = BoardState::initial();
+        let mut engine = AiEngine::from_difficulty(Difficulty::Easy);
+
+        let _ = engine.search(&state);
+        assert!(engine.tt_stats().used > 0);
+
+        engine.clear_tt();
+        assert_eq!(engine.tt_stats().used, 0, "清空后置换表应该为空");
     }
 }

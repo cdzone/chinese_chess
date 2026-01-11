@@ -358,11 +358,7 @@ impl MoveGenerator {
                 
                 if dx == 0 && dy == forward {
                     true
-                } else if crossed && dy == 0 && dx.abs() == 1 {
-                    true
-                } else {
-                    false
-                }
+                } else { crossed && dy == 0 && dx.abs() == 1 }
             }
         }
     }
@@ -479,6 +475,111 @@ mod tests {
     }
 
     #[test]
+    fn test_king_corner() {
+        // 帅在九宫格角落
+        let mut board = Board::empty();
+        board.set(
+            Position::new_unchecked(3, 0),
+            Some(Piece::new(PieceType::King, Side::Red)),
+        );
+
+        let mut moves = Vec::new();
+        MoveGenerator::generate_king_moves(&board, Position::new_unchecked(3, 0), Side::Red, &mut moves);
+
+        // 角落只有2个方向
+        assert_eq!(moves.len(), 2);
+    }
+
+    #[test]
+    fn test_advisor_moves() {
+        // 士在九宫格中心
+        let mut board = Board::empty();
+        board.set(
+            Position::new_unchecked(4, 1),
+            Some(Piece::new(PieceType::Advisor, Side::Red)),
+        );
+
+        let mut moves = Vec::new();
+        MoveGenerator::generate_advisor_moves(&board, Position::new_unchecked(4, 1), Side::Red, &mut moves);
+
+        // 士在中心有4个斜向位置
+        assert_eq!(moves.len(), 4);
+    }
+
+    #[test]
+    fn test_advisor_corner() {
+        // 士在九宫格角落
+        let mut board = Board::empty();
+        board.set(
+            Position::new_unchecked(3, 0),
+            Some(Piece::new(PieceType::Advisor, Side::Red)),
+        );
+
+        let mut moves = Vec::new();
+        MoveGenerator::generate_advisor_moves(&board, Position::new_unchecked(3, 0), Side::Red, &mut moves);
+
+        // 角落只能走到中心
+        assert_eq!(moves.len(), 1);
+        assert_eq!(moves[0].to, Position::new_unchecked(4, 1));
+    }
+
+    #[test]
+    fn test_bishop_moves() {
+        // 象在初始位置 (2, 0)
+        let mut board = Board::empty();
+        board.set(
+            Position::new_unchecked(2, 0),
+            Some(Piece::new(PieceType::Bishop, Side::Red)),
+        );
+
+        let mut moves = Vec::new();
+        MoveGenerator::generate_bishop_moves(&board, Position::new_unchecked(2, 0), Side::Red, &mut moves);
+
+        // 象在 (2, 0) 可以走到 (4, 2) 和 (0, 2)
+        assert_eq!(moves.len(), 2);
+    }
+
+    #[test]
+    fn test_bishop_blocked() {
+        // 象眼被堵
+        let mut board = Board::empty();
+        board.set(
+            Position::new_unchecked(2, 0),
+            Some(Piece::new(PieceType::Bishop, Side::Red)),
+        );
+        // 堵住一个象眼 (3, 1)
+        board.set(
+            Position::new_unchecked(3, 1),
+            Some(Piece::new(PieceType::Pawn, Side::Red)),
+        );
+
+        let mut moves = Vec::new();
+        MoveGenerator::generate_bishop_moves(&board, Position::new_unchecked(2, 0), Side::Red, &mut moves);
+
+        // 只堵住一个象眼，还能走另一个方向
+        assert_eq!(moves.len(), 1);
+        assert_eq!(moves[0].to, Position::new_unchecked(0, 2));
+    }
+
+    #[test]
+    fn test_bishop_cannot_cross_river() {
+        // 象在河边
+        let mut board = Board::empty();
+        board.set(
+            Position::new_unchecked(4, 2),
+            Some(Piece::new(PieceType::Bishop, Side::Red)),
+        );
+
+        let mut moves = Vec::new();
+        MoveGenerator::generate_bishop_moves(&board, Position::new_unchecked(4, 2), Side::Red, &mut moves);
+
+        // 象不能过河，所有走法的 y 坐标应该 < 5
+        for mv in &moves {
+            assert!(mv.to.y < 5, "象不能过河: {:?}", mv.to);
+        }
+    }
+
+    #[test]
     fn test_knight_moves() {
         let mut board = Board::empty();
         board.set(
@@ -514,6 +615,204 @@ mod tests {
     }
 
     #[test]
+    fn test_knight_all_blocked() {
+        // 马被完全堵住
+        let mut board = Board::empty();
+        board.set(
+            Position::new_unchecked(4, 4),
+            Some(Piece::new(PieceType::Knight, Side::Red)),
+        );
+        // 堵住所有马腿
+        board.set(Position::new_unchecked(4, 5), Some(Piece::new(PieceType::Pawn, Side::Red)));
+        board.set(Position::new_unchecked(4, 3), Some(Piece::new(PieceType::Pawn, Side::Red)));
+        board.set(Position::new_unchecked(5, 4), Some(Piece::new(PieceType::Pawn, Side::Red)));
+        board.set(Position::new_unchecked(3, 4), Some(Piece::new(PieceType::Pawn, Side::Red)));
+
+        let mut moves = Vec::new();
+        MoveGenerator::generate_knight_moves(&board, Position::new_unchecked(4, 4), Side::Red, &mut moves);
+
+        assert_eq!(moves.len(), 0);
+    }
+
+    #[test]
+    fn test_rook_moves() {
+        let mut board = Board::empty();
+        board.set(
+            Position::new_unchecked(4, 4),
+            Some(Piece::new(PieceType::Rook, Side::Red)),
+        );
+
+        let mut moves = Vec::new();
+        MoveGenerator::generate_rook_moves(&board, Position::new_unchecked(4, 4), Side::Red, &mut moves);
+
+        // 车在中间，可以走 4+4+5+4 = 17 个位置
+        assert_eq!(moves.len(), 17);
+    }
+
+    #[test]
+    fn test_rook_blocked() {
+        let mut board = Board::empty();
+        board.set(
+            Position::new_unchecked(4, 4),
+            Some(Piece::new(PieceType::Rook, Side::Red)),
+        );
+        // 放一个己方棋子挡住
+        board.set(
+            Position::new_unchecked(4, 6),
+            Some(Piece::new(PieceType::Pawn, Side::Red)),
+        );
+
+        let mut moves = Vec::new();
+        MoveGenerator::generate_rook_moves(&board, Position::new_unchecked(4, 4), Side::Red, &mut moves);
+
+        // 向上只能走1格，总共 1+4+4+4 = 13
+        assert_eq!(moves.len(), 13);
+    }
+
+    #[test]
+    fn test_rook_capture() {
+        let mut board = Board::empty();
+        board.set(
+            Position::new_unchecked(4, 4),
+            Some(Piece::new(PieceType::Rook, Side::Red)),
+        );
+        // 放一个敌方棋子
+        board.set(
+            Position::new_unchecked(4, 6),
+            Some(Piece::new(PieceType::Pawn, Side::Black)),
+        );
+
+        let mut moves = Vec::new();
+        MoveGenerator::generate_rook_moves(&board, Position::new_unchecked(4, 4), Side::Red, &mut moves);
+
+        // 可以吃掉敌方棋子
+        let capture = moves.iter().find(|m| m.to == Position::new_unchecked(4, 6));
+        assert!(capture.is_some());
+        assert!(capture.unwrap().captured.is_some());
+    }
+
+    #[test]
+    fn test_cannon_moves() {
+        let mut board = Board::empty();
+        board.set(
+            Position::new_unchecked(4, 4),
+            Some(Piece::new(PieceType::Cannon, Side::Red)),
+        );
+
+        let mut moves = Vec::new();
+        MoveGenerator::generate_cannon_moves(&board, Position::new_unchecked(4, 4), Side::Red, &mut moves);
+
+        // 炮在空棋盘上移动和车一样
+        assert_eq!(moves.len(), 17);
+    }
+
+    #[test]
+    fn test_cannon_capture() {
+        let mut board = Board::empty();
+        board.set(
+            Position::new_unchecked(4, 4),
+            Some(Piece::new(PieceType::Cannon, Side::Red)),
+        );
+        // 炮架
+        board.set(
+            Position::new_unchecked(4, 6),
+            Some(Piece::new(PieceType::Pawn, Side::Red)),
+        );
+        // 目标
+        board.set(
+            Position::new_unchecked(4, 8),
+            Some(Piece::new(PieceType::Pawn, Side::Black)),
+        );
+
+        let mut moves = Vec::new();
+        MoveGenerator::generate_cannon_moves(&board, Position::new_unchecked(4, 4), Side::Red, &mut moves);
+
+        // 炮可以吃 (4, 8)
+        let capture = moves.iter().find(|m| m.to == Position::new_unchecked(4, 8));
+        assert!(capture.is_some());
+        assert!(capture.unwrap().captured.is_some());
+
+        // 炮不能走到炮架位置
+        let blocked = moves.iter().find(|m| m.to == Position::new_unchecked(4, 6));
+        assert!(blocked.is_none());
+    }
+
+    #[test]
+    fn test_cannon_no_capture_without_mount() {
+        let mut board = Board::empty();
+        board.set(
+            Position::new_unchecked(4, 4),
+            Some(Piece::new(PieceType::Cannon, Side::Red)),
+        );
+        // 目标但没有炮架
+        board.set(
+            Position::new_unchecked(4, 8),
+            Some(Piece::new(PieceType::Pawn, Side::Black)),
+        );
+
+        let mut moves = Vec::new();
+        MoveGenerator::generate_cannon_moves(&board, Position::new_unchecked(4, 4), Side::Red, &mut moves);
+
+        // 炮不能直接吃
+        let capture = moves.iter().find(|m| m.to == Position::new_unchecked(4, 8));
+        assert!(capture.is_none());
+    }
+
+    #[test]
+    fn test_pawn_before_river() {
+        // 红兵在河前
+        let mut board = Board::empty();
+        board.set(
+            Position::new_unchecked(4, 3),
+            Some(Piece::new(PieceType::Pawn, Side::Red)),
+        );
+
+        let mut moves = Vec::new();
+        MoveGenerator::generate_pawn_moves(&board, Position::new_unchecked(4, 3), Side::Red, &mut moves);
+
+        // 只能前进
+        assert_eq!(moves.len(), 1);
+        assert_eq!(moves[0].to, Position::new_unchecked(4, 4));
+    }
+
+    #[test]
+    fn test_pawn_after_river() {
+        // 红兵过河
+        let mut board = Board::empty();
+        board.set(
+            Position::new_unchecked(4, 5),
+            Some(Piece::new(PieceType::Pawn, Side::Red)),
+        );
+
+        let mut moves = Vec::new();
+        MoveGenerator::generate_pawn_moves(&board, Position::new_unchecked(4, 5), Side::Red, &mut moves);
+
+        // 可以前进和左右
+        assert_eq!(moves.len(), 3);
+    }
+
+    #[test]
+    fn test_black_pawn() {
+        // 黑卒过河
+        let mut board = Board::empty();
+        board.set(
+            Position::new_unchecked(4, 4),
+            Some(Piece::new(PieceType::Pawn, Side::Black)),
+        );
+
+        let mut moves = Vec::new();
+        MoveGenerator::generate_pawn_moves(&board, Position::new_unchecked(4, 4), Side::Black, &mut moves);
+
+        // 黑卒过河后可以前进和左右
+        assert_eq!(moves.len(), 3);
+        
+        // 黑卒前进方向是 y 减小
+        let forward = moves.iter().find(|m| m.to.x == 4);
+        assert!(forward.is_some());
+        assert_eq!(forward.unwrap().to.y, 3);
+    }
+
+    #[test]
     fn test_check_detection() {
         // 创建一个红方被将军的局面
         let fen = "4k4/9/9/9/9/9/9/9/4r4/4K4 r 0 1";
@@ -524,12 +823,79 @@ mod tests {
     }
 
     #[test]
+    fn test_check_by_cannon() {
+        // 炮将军
+        let fen = "4k4/9/9/9/4P4/9/9/9/4C4/4K4 r 0 1";
+        let state = Fen::parse(fen).unwrap();
+
+        // 红炮隔着红兵将黑将
+        assert!(MoveGenerator::is_in_check(&state.board, Side::Black));
+    }
+
+    #[test]
+    fn test_check_by_knight() {
+        // 马将军
+        let fen = "4k4/9/3N5/9/9/9/9/9/9/4K4 r 0 1";
+        let state = Fen::parse(fen).unwrap();
+
+        assert!(MoveGenerator::is_in_check(&state.board, Side::Black));
+    }
+
+    #[test]
     fn test_checkmate() {
         // 一个简单的将死局面：红方帅被黑方车将死
         let fen = "3k5/9/9/9/9/9/9/9/3rr4/3K5 r 0 1";
         let state = Fen::parse(fen).unwrap();
 
         assert!(MoveGenerator::is_checkmate(&state));
+    }
+
+    #[test]
+    fn test_not_checkmate() {
+        // 被将军但可以逃
+        let fen = "4k4/9/9/9/9/9/9/9/4r4/4K4 r 0 1";
+        let state = Fen::parse(fen).unwrap();
+
+        assert!(MoveGenerator::is_in_check(&state.board, Side::Red));
+        assert!(!MoveGenerator::is_checkmate(&state));
+    }
+
+    #[test]
+    fn test_stalemate_logic() {
+        // 测试 is_stalemate 函数的逻辑
+        // 将死局面不是困毙（被将军了）
+        let fen = "3k5/9/9/9/9/9/9/9/3rr4/3K5 r 0 1";
+        let state = Fen::parse(fen).unwrap();
+        
+        assert!(MoveGenerator::is_in_check(&state.board, Side::Red));
+        assert!(!MoveGenerator::is_stalemate(&state)); // 被将军不是困毙
+        assert!(MoveGenerator::is_checkmate(&state));  // 是将死
+    }
+
+    #[test]
+    fn test_not_stalemate_with_moves() {
+        // 有合法走法不是困毙
+        let state = BoardState::initial();
+        
+        assert!(!MoveGenerator::is_in_check(&state.board, Side::Red));
+        assert!(!MoveGenerator::is_stalemate(&state)); // 有走法不是困毙
+    }
+
+    #[test]
+    fn test_flying_general() {
+        // 飞将：两将对面
+        let fen = "4k4/9/9/9/9/9/9/9/9/4K4 r 0 1";
+        let state = Fen::parse(fen).unwrap();
+
+        // 帅不能走到让两将对面的位置
+        let moves = MoveGenerator::generate_legal(&state);
+        
+        // 帅只能左右移动，不能前进（会飞将）
+        for mv in &moves {
+            if mv.from == Position::new_unchecked(4, 0) {
+                assert_ne!(mv.to.x, 4, "帅不能走到飞将位置");
+            }
+        }
     }
 
     #[test]
@@ -563,5 +929,73 @@ mod tests {
             Position::new_unchecked(0, 0),
             Position::new_unchecked(0, 3)
         ));
+    }
+
+    #[test]
+    fn test_rook_attack() {
+        let mut board = Board::empty();
+        board.set(
+            Position::new_unchecked(0, 0),
+            Some(Piece::new(PieceType::Rook, Side::Red)),
+        );
+
+        // 车可以直线攻击
+        assert!(MoveGenerator::can_rook_attack(
+            &board,
+            Position::new_unchecked(0, 0),
+            Position::new_unchecked(0, 5)
+        ));
+
+        // 有阻挡不能攻击
+        board.set(
+            Position::new_unchecked(0, 3),
+            Some(Piece::new(PieceType::Pawn, Side::Red)),
+        );
+        assert!(!MoveGenerator::can_rook_attack(
+            &board,
+            Position::new_unchecked(0, 0),
+            Position::new_unchecked(0, 5)
+        ));
+    }
+
+    #[test]
+    fn test_legal_moves_filter_check() {
+        // 被将军时只能应将
+        let fen = "4k4/9/9/9/9/9/9/9/4r4/3K5 r 0 1";
+        let state = Fen::parse(fen).unwrap();
+
+        let moves = MoveGenerator::generate_legal(&state);
+        
+        // 所有合法走法后都不应该被将军
+        for mv in &moves {
+            let mut test_state = state.clone();
+            test_state.board.move_piece(mv.from, mv.to);
+            assert!(!MoveGenerator::is_in_check(&test_state.board, Side::Red));
+        }
+    }
+
+    #[test]
+    fn test_initial_move_count() {
+        let state = BoardState::initial();
+        let moves = MoveGenerator::generate_legal(&state);
+        
+        // 初始局面红方有44个合法走法，详细计算:
+        // 炮(1,2)和(7,2): 各6个平移+6个进退=12个，共2*12=24
+        //   - 平移: 左5格+右5格=10个，但被马/车阻挡，实际6个
+        //   - 进退: 前7格+后2格=9个，但被子阻挡，实际6个
+        // 马(1,0)和(7,0): 各2个(进三/进七)，共2*2=4
+        //   - 蹩马腿规则限制，只有2个走法
+        // 车(0,0)和(8,0): 各2个(进一/进二)，共2*2=4
+        //   - 被马和边界阻挡，只能前进1-2格
+        // 兵(0,3),(2,3),(4,3),(6,3),(8,3): 各1个(進一)，共5*1=5
+        //   - 过河前只能前进
+        // 相(2,0)和(6,0): 各1个(進五/進三)，共2*1=2
+        //   - 田字走法，初始位置只有1个合法走法
+        // 仕(3,0)和(5,0): 各1个(進四/進六)，共2*1=2
+        //   - 斜线走法，初始位置只有1个合法走法
+        // 帅(4,0): 3个(進一/平四/平六)，共1*3=3
+        //   - 九宫格内可前进和左右平移
+        // 总计: 24+4+4+5+2+2+3=44
+        assert_eq!(moves.len(), 44);
     }
 }

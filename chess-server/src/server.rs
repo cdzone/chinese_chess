@@ -499,7 +499,7 @@ impl MessageHandler {
 
         // 生成中文记谱
         let new_state = room.game_state.clone()?;
-        let last_move = room.move_history.last()?.clone();
+        let last_move = *room.move_history.last()?;
         let notation = Notation::to_chinese(&new_state.board, &last_move).unwrap_or_default();
 
         // 获取时间信息
@@ -1100,6 +1100,7 @@ impl MessageHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use protocol::Difficulty;
 
     #[tokio::test]
     async fn test_login() {
@@ -1107,6 +1108,17 @@ mod tests {
         
         let result = MessageHandler::handle_login(&mut state, "玩家1".to_string());
         assert!(matches!(result, Some(ServerMessage::LoginSuccess { .. })));
+    }
+
+    #[tokio::test]
+    async fn test_login_duplicate_nickname() {
+        let mut state = ServerState::new().unwrap();
+        
+        let _ = MessageHandler::handle_login(&mut state, "玩家1".to_string());
+        let result = MessageHandler::handle_login(&mut state, "玩家1".to_string());
+        
+        // 重复昵称应该失败
+        assert!(matches!(result, Some(ServerMessage::Error { .. })));
     }
 
     #[tokio::test]
@@ -1129,5 +1141,88 @@ mod tests {
         );
 
         assert!(matches!(result, Some(ServerMessage::RoomCreated { .. })));
+    }
+
+    #[tokio::test]
+    async fn test_create_pve_room() {
+        let mut state = ServerState::new().unwrap();
+        
+        let player_id = match MessageHandler::handle_login(&mut state, "玩家".to_string()) {
+            Some(ServerMessage::LoginSuccess { player_id }) => player_id,
+            _ => panic!("Login failed"),
+        };
+
+        let result = MessageHandler::handle_create_room(
+            &mut state,
+            player_id,
+            RoomType::PvE(Difficulty::Easy),
+            Some(Side::Red),
+        );
+
+        // PvE 房间直接返回 GameStarted
+        assert!(matches!(result, Some(ServerMessage::GameStarted { .. })));
+    }
+
+    #[tokio::test]
+    async fn test_room_list() {
+        let mut state = ServerState::new().unwrap();
+        
+        // 创建几个房间
+        let player1_id = match MessageHandler::handle_login(&mut state, "玩家1".to_string()) {
+            Some(ServerMessage::LoginSuccess { player_id }) => player_id,
+            _ => panic!("Login failed"),
+        };
+        let _ = MessageHandler::handle_create_room(&mut state, player1_id, RoomType::PvP, None);
+
+        let player2_id = match MessageHandler::handle_login(&mut state, "玩家2".to_string()) {
+            Some(ServerMessage::LoginSuccess { player_id }) => player_id,
+            _ => panic!("Login failed"),
+        };
+        let _ = MessageHandler::handle_create_room(&mut state, player2_id, RoomType::PvP, None);
+
+        // 获取房间列表
+        let result = MessageHandler::handle_list_rooms(&state);
+        match result {
+            Some(ServerMessage::RoomList { rooms }) => {
+                assert_eq!(rooms.len(), 2);
+            }
+            _ => panic!("Expected room list"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_disconnect_sets_timeout() {
+        let mut state = ServerState::new().unwrap();
+        
+        let player_id = match MessageHandler::handle_login(&mut state, "玩家".to_string()) {
+            Some(ServerMessage::LoginSuccess { player_id }) => player_id,
+            _ => panic!("Login failed"),
+        };
+
+        // 创建房间（玩家需要在房间中才会设置断线超时）
+        let _ = MessageHandler::handle_create_room(&mut state, player_id, RoomType::PvP, None);
+
+        // 断线
+        MessageHandler::handle_disconnect(&mut state, player_id).await;
+
+        // 验证断线超时已设置
+        assert!(state.disconnect_timeouts.contains_key(&player_id));
+    }
+
+    #[tokio::test]
+    async fn test_cannot_create_multiple_rooms() {
+        let mut state = ServerState::new().unwrap();
+        
+        let player_id = match MessageHandler::handle_login(&mut state, "玩家".to_string()) {
+            Some(ServerMessage::LoginSuccess { player_id }) => player_id,
+            _ => panic!("Login failed"),
+        };
+
+        // 创建第一个房间
+        let _ = MessageHandler::handle_create_room(&mut state, player_id, RoomType::PvP, None);
+
+        // 尝试创建第二个房间应该失败
+        let result = MessageHandler::handle_create_room(&mut state, player_id, RoomType::PvP, None);
+        assert!(matches!(result, Some(ServerMessage::Error { .. })));
     }
 }

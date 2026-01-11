@@ -123,6 +123,7 @@ impl Evaluator {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use protocol::Fen;
 
     #[test]
     fn test_initial_evaluation() {
@@ -138,5 +139,121 @@ mod tests {
         let score = Evaluator::evaluate_material(&board);
         // 初始局面子力应该相等
         assert_eq!(score, 0);
+    }
+
+    #[test]
+    fn test_piece_values() {
+        // 验证棋子基础分值
+        assert_eq!(PieceType::King.value(), 10000);
+        assert_eq!(PieceType::Rook.value(), 900);
+        assert_eq!(PieceType::Knight.value(), 400);
+        assert_eq!(PieceType::Cannon.value(), 450);
+        assert_eq!(PieceType::Bishop.value(), 200);
+        assert_eq!(PieceType::Advisor.value(), 200);
+        assert_eq!(PieceType::Pawn.value(), 100);
+    }
+
+    #[test]
+    fn test_material_advantage() {
+        // 红方多一个车
+        let fen = "rnbakabnr/9/1c5c1/p1p1p1p1p/9/9/P1P1P1P1P/1C5C1/9/RNBAKABN1 w 0 1";
+        let state = Fen::parse(fen).unwrap();
+        let score = Evaluator::evaluate_material(&state.board);
+        
+        // 红方少一个车，分数应该为负
+        assert!(score < 0, "红方少车应该分数为负: {}", score);
+        assert!(score.abs() >= 900, "车的价值应该接近 1000: {}", score);
+    }
+
+    #[test]
+    fn test_position_bonus_pawn() {
+        // 过河兵比未过河兵价值高
+        let fen = "4k4/9/9/9/4P4/9/9/9/9/4K4 w 0 1";
+        let state = Fen::parse(fen).unwrap();
+        let score1 = Evaluator::evaluate(&state.board);
+
+        // 未过河兵
+        let fen2 = "4k4/9/9/9/9/9/9/4P4/9/4K4 w 0 1";
+        let state2 = Fen::parse(fen2).unwrap();
+        let score2 = Evaluator::evaluate(&state2.board);
+
+        // 过河兵应该分数更高
+        assert!(score1 > score2, "过河兵应该比未过河兵价值高: {} vs {}", score1, score2);
+    }
+
+    #[test]
+    fn test_position_bonus_knight() {
+        // 中心位置的马比边角的马价值高
+        let fen = "4k4/9/9/9/4N4/9/9/9/9/4K4 w 0 1";
+        let state = Fen::parse(fen).unwrap();
+        let score1 = Evaluator::evaluate(&state.board);
+
+        // 边角的马
+        let fen2 = "4k4/9/9/9/9/9/9/9/9/N3K4 w 0 1";
+        let state2 = Fen::parse(fen2).unwrap();
+        let score2 = Evaluator::evaluate(&state2.board);
+
+        // 中心马应该分数更高
+        assert!(score1 > score2, "中心马应该比边角马价值高: {} vs {}", score1, score2);
+    }
+
+    #[test]
+    fn test_symmetry() {
+        // 对称局面应该评估为 0
+        let board = Board::initial();
+        let score = Evaluator::evaluate_material(&board);
+        assert_eq!(score, 0, "对称局面应该为 0");
+    }
+
+    #[test]
+    fn test_black_mirror() {
+        // 黑方棋子的位置分应该正确镜像
+        // 红方兵在 (4, 5) 和 黑方卒在 (4, 4) 应该有相同的位置加成
+        let fen = "4k4/9/9/9/4p4/4P4/9/9/9/4K4 w 0 1";
+        let state = Fen::parse(fen).unwrap();
+        let score = Evaluator::evaluate(&state.board);
+        
+        // 两个兵/卒在对称位置，分数应该接近 0
+        println!("对称兵/卒局面分数: {}", score);
+        assert!(score.abs() < 50, "对称兵/卒应该接近平衡: {}", score);
+    }
+
+    #[test]
+    fn test_evaluate_endgame() {
+        // 残局评估
+        let fen = "4k4/9/9/9/9/9/9/9/4R4/4K4 w 0 1";
+        let state = Fen::parse(fen).unwrap();
+        let score = Evaluator::evaluate(&state.board);
+        
+        // 红方多一个车，应该大幅领先
+        assert!(score > 500, "红方多车应该大幅领先: {}", score);
+    }
+
+    #[test]
+    fn test_cannon_position() {
+        // 炮在中心位置比边缘价值高
+        let fen = "4k4/9/9/9/4C4/9/9/9/9/4K4 w 0 1";
+        let state = Fen::parse(fen).unwrap();
+        let score1 = Evaluator::evaluate(&state.board);
+
+        let fen2 = "4k4/9/9/9/9/9/9/9/C8/4K4 w 0 1";
+        let state2 = Fen::parse(fen2).unwrap();
+        let score2 = Evaluator::evaluate(&state2.board);
+
+        assert!(score1 > score2, "中心炮应该比边缘炮价值高: {} vs {}", score1, score2);
+    }
+
+    #[test]
+    fn test_rook_position() {
+        // 车在中心位置比边缘价值高
+        let fen = "4k4/9/9/9/4R4/9/9/9/9/4K4 w 0 1";
+        let state = Fen::parse(fen).unwrap();
+        let score1 = Evaluator::evaluate(&state.board);
+
+        let fen2 = "4k4/9/9/9/9/9/9/9/R8/4K4 w 0 1";
+        let state2 = Fen::parse(fen2).unwrap();
+        let score2 = Evaluator::evaluate(&state2.board);
+
+        assert!(score1 > score2, "中心车应该比边缘车价值高: {} vs {}", score1, score2);
     }
 }
