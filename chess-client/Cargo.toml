@@ -3,6 +3,10 @@ name = "chess-client"
 version.workspace = true
 edition.workspace = true
 
+[features]
+default = []
+llm = ["chess-ai/llm"]
+
 [dependencies]
 protocol = { workspace = true }
 chess-ai = { path = "../chess-ai" }
@@ -16,4 +20,4 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 chrono = { workspace = true }
 lazy_static = "1.4"
-dirs = "5.0"
+dirs = "6.0"

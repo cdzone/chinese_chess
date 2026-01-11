@@ -97,15 +97,29 @@ impl OllamaClient {
     }
 
     /// 检查 Ollama 服务是否可用
-    pub async fn health_check(&self) -> Result<bool> {
+    /// 使用独立的短超时客户端，避免长时间等待
+    /// 返回 Ok(()) 表示服务可用，Err 表示不可用并包含具体原因
+    pub async fn health_check(&self) -> Result<()> {
         let url = format!("{}/api/tags", self.config.base_url);
         
-        match self.client.get(&url).send().await {
-            Ok(resp) => Ok(resp.status().is_success()),
-            Err(e) => {
-                warn!("Ollama health check failed: {}", e);
-                Ok(false)
-            }
+        // 创建一个短超时的客户端用于健康检查（5秒）
+        let health_client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(5))
+            .build()
+            .context("Failed to create health check client")?;
+        
+        let resp = health_client.get(&url).send().await
+            .context(format!("无法连接到 Ollama 服务 ({})", self.config.base_url))?;
+        
+        if resp.status().is_success() {
+            info!("Ollama health check passed");
+            Ok(())
+        } else {
+            Err(anyhow::anyhow!(
+                "Ollama 服务返回错误状态: {} ({})", 
+                resp.status(), 
+                self.config.base_url
+            ))
         }
     }
 

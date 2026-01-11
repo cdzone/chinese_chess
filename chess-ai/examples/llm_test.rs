@@ -26,8 +26,9 @@ async fn main() -> anyhow::Result<()> {
     println!("1. 检查 Ollama 服务...");
     let client = OllamaClient::new(OllamaConfig::default())?;
 
-    if !client.health_check().await? {
-        println!("   ❌ Ollama 服务未运行，请先执行: ollama serve");
+    if let Err(e) = client.health_check().await {
+        println!("   ❌ Ollama 服务未运行: {}", e);
+        println!("   请先执行: ollama serve");
         return Ok(());
     }
     println!("   ✅ Ollama 服务正常\n");

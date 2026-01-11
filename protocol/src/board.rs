@@ -188,7 +188,7 @@ pub struct BoardState {
     /// 完整回合数（一回合 = 红黑各走一步，黑方走完后 +1）
     pub round: u32,
     /// 位置历史（Zobrist hash，用于判断重复局面）
-    /// TODO: 待实现 Zobrist hash 计算
+    /// 注：Zobrist hash 计算实现见 chess-ai::ZobristTable
     pub position_history: Vec<u64>,
 }
 

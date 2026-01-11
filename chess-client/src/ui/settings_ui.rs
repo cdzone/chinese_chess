@@ -400,6 +400,43 @@ fn spawn_network_settings(
     // 昵称（只读显示，暂不支持编辑）
     spawn_text_display_row(parent, asset_server, "默认昵称", &settings.nickname);
 
+    // 分隔线
+    parent.spawn((
+        Node {
+            width: Val::Percent(100.0),
+            height: Val::Px(1.0),
+            margin: UiRect::vertical(Val::Px(15.0)),
+            ..default()
+        },
+        BackgroundColor(Color::srgb(0.3, 0.3, 0.3)),
+    ));
+
+    // LLM 设置标题
+    parent.spawn((
+        Text::new("─ LLM 设置（AI 复盘分析）─"),
+        TextFont {
+            font: asset_server.load("fonts/SourceHanSansSC-Bold.otf"),
+            font_size: 16.0,
+            ..default()
+        },
+        TextColor(Color::srgb(0.6, 0.8, 0.9)),
+        Node {
+            margin: UiRect::bottom(Val::Px(10.0)),
+            ..default()
+        },
+    ));
+
+    // Ollama 服务地址
+    spawn_text_display_row(
+        parent,
+        asset_server,
+        "Ollama 地址",
+        &settings.llm_base_url,
+    );
+
+    // LLM 模型
+    spawn_text_display_row(parent, asset_server, "LLM 模型", &settings.llm_model);
+
     // 提示
     parent.spawn((
         Text::new("文本输入功能开发中..."),
@@ -411,6 +448,21 @@ fn spawn_network_settings(
         TextColor(Color::srgb(0.5, 0.5, 0.5)),
         Node {
             margin: UiRect::top(Val::Px(20.0)),
+            ..default()
+        },
+    ));
+
+    // LLM 使用说明
+    parent.spawn((
+        Text::new("提示：需要本地运行 Ollama 服务才能使用 AI 复盘功能"),
+        TextFont {
+            font: asset_server.load("fonts/SourceHanSansSC-Regular.otf"),
+            font_size: 13.0,
+            ..default()
+        },
+        TextColor(Color::srgb(0.6, 0.6, 0.6)),
+        Node {
+            margin: UiRect::top(Val::Px(5.0)),
             ..default()
         },
     ));

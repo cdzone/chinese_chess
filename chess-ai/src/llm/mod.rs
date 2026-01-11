@@ -6,8 +6,13 @@ mod prompt;
 mod client;
 mod parser;
 mod engine;
+mod analysis;
 
 pub use prompt::PromptTemplate;
 pub use client::{OllamaClient, OllamaConfig};
 pub use parser::{MoveParser, LlmMove};
 pub use engine::{LlmEngine, AiBackend};
+pub use analysis::{
+    GameAnalysis, OpeningReview, KeyMoment, MomentType, MomentSide,
+    EndgameReview, Suggestions, Weaknesses, OverallRating,
+};

@@ -7,12 +7,14 @@ mod game_ui;
 mod settings_ui;
 mod lobby_ui;
 mod saved_games_ui;
+mod analysis_ui;
 
 pub use menu::*;
 pub use game_ui::*;
 pub use settings_ui::*;
 pub use lobby_ui::*;
 pub use saved_games_ui::*;
+pub use analysis_ui::*;
 
 use bevy::prelude::*;
 use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
@@ -33,6 +35,8 @@ impl Plugin for UiPlugin {
             .add_plugins(FrameTimeDiagnosticsPlugin::default())
             // 添加保存棋局列表资源
             .init_resource::<SavedGamesList>()
+            // 添加 AI 分析状态资源
+            .init_resource::<AiAnalysisState>()
             // UI 缩放系统（全局运行）
             .add_systems(Update, (update_ui_scale, update_fps_display))
             // 启动时创建 FPS 显示
@@ -75,7 +79,7 @@ impl Plugin for UiPlugin {
             // 游戏结束
             .add_systems(OnEnter(GameState::GameOver), setup_game_over_ui)
             .add_systems(OnExit(GameState::GameOver), cleanup_game_over_ui)
-            .add_systems(Update, handle_game_over_buttons.run_if(in_state(GameState::GameOver)));
+            .add_systems(Update, (handle_game_over_buttons, handle_analysis_buttons, poll_ai_analysis_task, handle_analysis_scroll).run_if(in_state(GameState::GameOver)));
     }
 }
 
@@ -177,6 +181,10 @@ pub enum ButtonAction {
     BackToMenu,
     PlayAgain,
     ExportGame,
+    AiAnalysis,  // AI 复盘分析
+    // AI 分析界面
+    CloseAnalysis,
+    SaveAnalysisReport,
     // 大厅
     RefreshRooms,
     BackToMenuFromLobby,

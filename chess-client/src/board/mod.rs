@@ -109,7 +109,7 @@ impl BoardLayout {
         let x = (relative.x / self.cell_size + 0.5).floor() as i32;
         let y = (relative.y / self.cell_size + 0.5).floor() as i32;
 
-        if x >= 0 && x <= 8 && y >= 0 && y <= 9 {
+        if (0..=8).contains(&x) && (0..=9).contains(&y) {
             Some((x as u8, y as u8))
         } else {
             None

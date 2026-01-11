@@ -613,6 +613,33 @@ pub fn update_ai_thinking_indicator(
     }
 }
 
+/// 处理分析结果区域的鼠标滚轮滚动
+pub fn handle_analysis_scroll(
+    mut scroll_events: MessageReader<MouseWheel>,
+    mut query: Query<(&Interaction, &mut ScrollPosition, &ComputedNode), With<super::AnalysisScrollContainer>>,
+) {
+    for event in scroll_events.read() {
+        for (interaction, mut scroll_pos, computed) in &mut query {
+            // 只在鼠标悬停时响应滚轮
+            if *interaction != Interaction::Hovered && *interaction != Interaction::Pressed {
+                continue;
+            }
+            
+            let scroll_amount = match event.unit {
+                bevy::input::mouse::MouseScrollUnit::Line => event.y * 30.0,
+                bevy::input::mouse::MouseScrollUnit::Pixel => event.y,
+            };
+            
+            // 更新滚动位置（向上滚动减少 y，向下滚动增加 y）
+            let new_y = (scroll_pos.0.y - scroll_amount).max(0.0);
+            
+            // 限制最大滚动距离（内容高度 - 可见高度）
+            let max_scroll = (computed.content_size().y - computed.size().y).max(0.0);
+            scroll_pos.0.y = new_y.min(max_scroll);
+        }
+    }
+}
+
 /// 设置游戏结束 UI
 pub fn setup_game_over_ui(
     mut commands: Commands,
@@ -732,9 +759,32 @@ pub fn setup_game_over_ui(
                             justify_content: JustifyContent::Center,
                             column_gap: Val::Px(15.0),
                             margin: UiRect::top(Val::Px(10.0)),
+                            flex_wrap: FlexWrap::Wrap,
+                            row_gap: Val::Px(10.0),
                             ..default()
                         })
                         .with_children(|parent| {
+                            // 悔棋按钮（仅本地模式且有历史记录时显示）
+                            if game.is_local() && game.can_undo_at_game_over() {
+                                spawn_result_button(
+                                    parent,
+                                    &asset_server,
+                                    "悔棋",
+                                    ButtonAction::Undo,
+                                    Color::srgb(0.5, 0.4, 0.2),
+                                );
+                            }
+
+                            // AI 复盘分析按钮（仅在 llm feature 启用时显示）
+                            #[cfg(feature = "llm")]
+                            spawn_result_button(
+                                parent,
+                                &asset_server,
+                                "AI 复盘",
+                                ButtonAction::AiAnalysis,
+                                Color::srgb(0.4, 0.3, 0.6),
+                            );
+
                             // 返回主菜单按钮
                             spawn_result_button(
                                 parent,
@@ -848,6 +898,8 @@ pub fn cleanup_game_over_ui(mut commands: Commands, query: Query<Entity, With<Ga
 
 /// 处理游戏结束界面的按钮点击
 pub fn handle_game_over_buttons(
+    mut commands: Commands,
+    asset_server: Res<AssetServer>,
     mut interaction_query: Query<
         (&Interaction, &mut BackgroundColor, &ButtonAction),
         (Changed<Interaction>, With<Button>),
@@ -857,6 +909,7 @@ pub fn handle_game_over_buttons(
     mut network_events: MessageWriter<NetworkEvent>,
     conn_handle: Res<crate::network::NetworkConnectionHandle>,
     settings: Res<crate::settings::GameSettings>,
+    mut analysis_state: ResMut<super::AiAnalysisState>,
 ) {
     for (interaction, mut color, action) in &mut interaction_query {
         match *interaction {
@@ -874,6 +927,15 @@ pub fn handle_game_over_buttons(
                     }
                     ButtonAction::ExportGame => {
                         export_game_record(&game, &settings);
+                    }
+                    ButtonAction::AiAnalysis => {
+                        tracing::info!("AI Analysis clicked");
+                        // 设置分析状态
+                        analysis_state.is_analyzing = true;
+                        analysis_state.result = None;
+                        analysis_state.error = None;
+                        // 启动异步分析任务
+                        start_ai_analysis(&game, &settings, commands.reborrow(), asset_server.clone());
                     }
                     ButtonAction::PlayAgain => {
                         tracing::info!("Play again clicked");
@@ -920,6 +982,15 @@ pub fn handle_game_over_buttons(
                             }
                         }
                     }
+                    ButtonAction::Undo => {
+                        tracing::info!("Undo at game over clicked");
+                        if game.is_local() && game.local_undo() {
+                            tracing::info!("终盘悔棋成功，返回游戏");
+                            game_state.set(GameState::Playing);
+                        } else {
+                            tracing::warn!("终盘悔棋失败");
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -931,4 +1002,1033 @@ pub fn handle_game_over_buttons(
             }
         }
     }
+}
+
+/// AI 分析任务组件
+#[derive(Component)]
+pub struct AiAnalysisTask(pub bevy::tasks::Task<Result<chess_ai::llm::GameAnalysis, String>>);
+
+/// 启动 AI 分析任务
+fn start_ai_analysis(
+    game: &ClientGame,
+    settings: &crate::settings::GameSettings,
+    mut commands: Commands,
+    asset_server: AssetServer,
+) {
+    use bevy::tasks::AsyncComputeTaskPool;
+
+    // 准备分析所需的数据
+    let Some(ref board_state) = game.game_state else {
+        tracing::warn!("无法分析：游戏状态为空");
+        return;
+    };
+
+    let state = board_state.clone();
+    let move_history: Vec<protocol::Move> = game.move_history.iter()
+        .map(|r| protocol::Move::new(r.from, r.to))
+        .collect();
+
+    // 确定玩家名称
+    let red_player = settings.nickname.clone();
+    let black_player = match &game.game_mode {
+        Some(crate::game::GameMode::LocalPvE { difficulty }) => {
+            format!("AI-{:?}", difficulty)
+        }
+        Some(crate::game::GameMode::OnlinePvE { difficulty, .. }) => {
+            format!("AI-{:?}", difficulty)
+        }
+        _ => "对手".to_string(),
+    };
+
+    // 确定游戏结果
+    let result = match &game.game_result {
+        Some(protocol::GameResult::RedWin(reason)) => format!("红方胜（{:?}）", reason),
+        Some(protocol::GameResult::BlackWin(reason)) => format!("黑方胜（{:?}）", reason),
+        Some(protocol::GameResult::Draw(reason)) => format!("和棋（{:?}）", reason),
+        None => "未知结果".to_string(),
+    };
+
+    // LLM 配置
+    let llm_base_url = settings.llm_base_url.clone();
+    let llm_model = settings.llm_model.clone();
+
+    // 显示加载界面
+    spawn_analysis_loading_ui(&mut commands, &asset_server);
+
+    // 创建异步任务
+    // 注意：Bevy 的 AsyncComputeTaskPool 不是 tokio runtime，
+    // 所以需要在任务中创建独立的 tokio runtime 来执行 HTTP 请求
+    let task_pool = AsyncComputeTaskPool::get();
+    let task = task_pool.spawn(async move {
+        tracing::info!("Starting AI analysis task");
+
+        // 创建独立的 tokio runtime 来执行 HTTP 请求
+        // 因为 Bevy 的 AsyncComputeTaskPool 不兼容 reqwest
+        let rt = match tokio::runtime::Runtime::new() {
+            Ok(rt) => rt,
+            Err(e) => {
+                tracing::error!("Failed to create tokio runtime: {}", e);
+                return Err("无法创建异步运行时".to_string());
+            }
+        };
+
+        rt.block_on(async {
+            // 创建 LLM 引擎
+            let config = chess_ai::llm::OllamaConfig {
+                base_url: llm_base_url.clone(),
+                model: llm_model,
+                max_tokens: 4096,  // 分析需要更多 tokens
+                temperature: 0.7,
+                timeout_secs: 120,  // 分析可能需要更长时间
+            };
+
+            let mut engine = match chess_ai::llm::LlmEngine::new(config) {
+                Ok(e) => e,
+                Err(e) => {
+                    tracing::error!("Failed to create LLM engine: {}", e);
+                    return Err(format!("无法创建 LLM 引擎: {}", e));
+                }
+            };
+
+            // P2 修复：先检查 LLM 服务是否可用，返回具体错误信息
+            tracing::info!("Checking LLM service availability at {}", llm_base_url);
+            if let Err(e) = engine.check_available().await {
+                tracing::error!("LLM service check failed: {}", e);
+                return Err(format!("LLM 服务不可用: {}", e));
+            }
+            tracing::info!("LLM service is available");
+
+            // 添加走法历史
+            for mv in &move_history {
+                engine.add_move(*mv);
+            }
+
+            // 执行分析
+            match engine.analyze_game(&state, &result, &red_player, &black_player).await {
+                Ok(analysis) => {
+                    tracing::info!("AI analysis completed successfully");
+                    Ok(analysis)
+                }
+                Err(e) => {
+                    tracing::error!("AI analysis failed: {}", e);
+                    Err(format!("分析失败: {}", e))
+                }
+            }
+        })
+    });
+
+    // 将任务添加为实体组件
+    commands.spawn(AiAnalysisTask(task));
+}
+
+/// 直接生成加载界面（不使用系统）
+fn spawn_analysis_loading_ui(commands: &mut Commands, asset_server: &AssetServer) {
+    commands
+        .spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                width: Val::Percent(100.0),
+                height: Val::Percent(100.0),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                ..default()
+            },
+            BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.9)),
+            UiMarker,
+            super::AnalysisUiMarker,
+            super::AnalysisLoadingMarker,
+        ))
+        .with_children(|parent| {
+            parent
+                .spawn((
+                    Node {
+                        flex_direction: FlexDirection::Column,
+                        align_items: AlignItems::Center,
+                        padding: UiRect::all(Val::Px(50.0)),
+                        ..default()
+                    },
+                    BackgroundColor(Color::srgb(0.15, 0.15, 0.15)),
+                    BorderRadius::all(Val::Px(12.0)),
+                ))
+                .with_children(|parent| {
+                    // 标题
+                    parent.spawn((
+                        Text::new("AI 复盘分析"),
+                        TextFont {
+                            font: asset_server.load("fonts/SourceHanSansSC-Bold.otf"),
+                            font_size: 32.0,
+                            ..default()
+                        },
+                        TextColor(Color::WHITE),
+                        Node {
+                            margin: UiRect::bottom(Val::Px(30.0)),
+                            ..default()
+                        },
+                    ));
+
+                    // 加载动画
+                    parent.spawn((
+                        Text::new("◎ AI 正在分析对局..."),
+                        TextFont {
+                            font: asset_server.load("fonts/SourceHanSansSC-Regular.otf"),
+                            font_size: 24.0,
+                            ..default()
+                        },
+                        TextColor(Color::srgb(1.0, 0.9, 0.3)),
+                        Node {
+                            margin: UiRect::bottom(Val::Px(15.0)),
+                            ..default()
+                        },
+                    ));
+
+                    // 提示信息
+                    parent.spawn((
+                        Text::new("预计需要 10-30 秒"),
+                        TextFont {
+                            font: asset_server.load("fonts/SourceHanSansSC-Regular.otf"),
+                            font_size: 16.0,
+                            ..default()
+                        },
+                        TextColor(Color::srgb(0.6, 0.6, 0.6)),
+                        Node {
+                            margin: UiRect::bottom(Val::Px(30.0)),
+                            ..default()
+                        },
+                    ));
+
+                    // 取消按钮
+                    parent
+                        .spawn((
+                            Button,
+                            Node {
+                                width: Val::Px(120.0),
+                                height: Val::Px(40.0),
+                                justify_content: JustifyContent::Center,
+                                align_items: AlignItems::Center,
+                                ..default()
+                            },
+                            BackgroundColor(Color::srgb(0.4, 0.2, 0.2)),
+                            BorderRadius::all(Val::Px(6.0)),
+                            ButtonAction::CloseAnalysis,
+                        ))
+                        .with_children(|parent| {
+                            parent.spawn((
+                                Text::new("取消"),
+                                TextFont {
+                                    font: asset_server.load("fonts/SourceHanSansSC-Regular.otf"),
+                                    font_size: 18.0,
+                                    ..default()
+                                },
+                                TextColor(Color::WHITE),
+                            ));
+                        });
+                });
+        });
+}
+
+/// 轮询 AI 分析任务结果
+pub fn poll_ai_analysis_task(
+    mut commands: Commands,
+    asset_server: Res<AssetServer>,
+    mut analysis_state: ResMut<super::AiAnalysisState>,
+    mut task_query: Query<(Entity, &mut AiAnalysisTask)>,
+    loading_query: Query<Entity, With<super::AnalysisLoadingMarker>>,
+) {
+    for (entity, mut task) in &mut task_query {
+        if task.0.is_finished() {
+            // 获取结果
+            let result = bevy::tasks::block_on(bevy::tasks::poll_once(&mut task.0));
+
+            // 清理任务实体
+            commands.entity(entity).despawn();
+
+            // 清理加载界面
+            for loading_entity in loading_query.iter() {
+                commands.entity(loading_entity).despawn();
+            }
+
+            // 更新分析状态
+            analysis_state.is_analyzing = false;
+
+            match result {
+                Some(Ok(analysis)) => {
+                    analysis_state.result = Some(analysis);
+                    // 显示结果界面
+                    spawn_analysis_result_ui(&mut commands, &asset_server, &analysis_state);
+                }
+                Some(Err(error_msg)) => {
+                    // P2 改进：显示具体错误信息
+                    analysis_state.error = Some(error_msg.clone());
+                    tracing::error!("AI analysis failed: {}", error_msg);
+                    // 显示错误界面
+                    spawn_analysis_error_ui(&mut commands, &asset_server, &error_msg);
+                }
+                None => {
+                    analysis_state.error = Some("分析任务异常终止".to_string());
+                    tracing::error!("AI analysis task returned None (task aborted?)");
+                }
+            }
+        }
+    }
+}
+
+/// 生成分析错误界面
+fn spawn_analysis_error_ui(
+    commands: &mut Commands,
+    asset_server: &AssetServer,
+    error_msg: &str,
+) {
+    commands
+        .spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                width: Val::Percent(100.0),
+                height: Val::Percent(100.0),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                ..default()
+            },
+            BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.9)),
+            UiMarker,
+            super::AnalysisUiMarker,
+        ))
+        .with_children(|parent| {
+            parent
+                .spawn((
+                    Node {
+                        flex_direction: FlexDirection::Column,
+                        align_items: AlignItems::Center,
+                        padding: UiRect::all(Val::Px(40.0)),
+                        max_width: Val::Px(500.0),
+                        ..default()
+                    },
+                    BackgroundColor(Color::srgb(0.15, 0.15, 0.15)),
+                    BorderRadius::all(Val::Px(12.0)),
+                ))
+                .with_children(|parent| {
+                    // 错误图标
+                    parent.spawn((
+                        Text::new("❌"),
+                        TextFont {
+                            font: asset_server.load("fonts/SourceHanSansSC-Bold.otf"),
+                            font_size: 48.0,
+                            ..default()
+                        },
+                        TextColor(Color::srgb(0.9, 0.3, 0.3)),
+                        Node {
+                            margin: UiRect::bottom(Val::Px(20.0)),
+                            ..default()
+                        },
+                    ));
+
+                    // 标题
+                    parent.spawn((
+                        Text::new("分析失败"),
+                        TextFont {
+                            font: asset_server.load("fonts/SourceHanSansSC-Bold.otf"),
+                            font_size: 28.0,
+                            ..default()
+                        },
+                        TextColor(Color::WHITE),
+                        Node {
+                            margin: UiRect::bottom(Val::Px(15.0)),
+                            ..default()
+                        },
+                    ));
+
+                    // 错误信息
+                    parent.spawn((
+                        Text::new(error_msg),
+                        TextFont {
+                            font: asset_server.load("fonts/SourceHanSansSC-Regular.otf"),
+                            font_size: 16.0,
+                            ..default()
+                        },
+                        TextColor(Color::srgb(0.8, 0.8, 0.8)),
+                        Node {
+                            margin: UiRect::bottom(Val::Px(25.0)),
+                            ..default()
+                        },
+                    ));
+
+                    // 提示信息
+                    parent.spawn((
+                        Text::new("请确保 Ollama 服务正在运行"),
+                        TextFont {
+                            font: asset_server.load("fonts/SourceHanSansSC-Regular.otf"),
+                            font_size: 14.0,
+                            ..default()
+                        },
+                        TextColor(Color::srgb(0.6, 0.6, 0.6)),
+                        Node {
+                            margin: UiRect::bottom(Val::Px(25.0)),
+                            ..default()
+                        },
+                    ));
+
+                    // 关闭按钮
+                    parent
+                        .spawn((
+                            Button,
+                            Node {
+                                width: Val::Px(120.0),
+                                height: Val::Px(40.0),
+                                justify_content: JustifyContent::Center,
+                                align_items: AlignItems::Center,
+                                ..default()
+                            },
+                            BackgroundColor(Color::srgb(0.3, 0.3, 0.3)),
+                            BorderRadius::all(Val::Px(6.0)),
+                            ButtonAction::CloseAnalysis,
+                        ))
+                        .with_children(|parent| {
+                            parent.spawn((
+                                Text::new("关闭"),
+                                TextFont {
+                                    font: asset_server.load("fonts/SourceHanSansSC-Regular.otf"),
+                                    font_size: 18.0,
+                                    ..default()
+                                },
+                                TextColor(Color::WHITE),
+                            ));
+                        });
+                });
+        });
+}
+
+/// 直接生成分析结果界面
+fn spawn_analysis_result_ui(
+    commands: &mut Commands,
+    asset_server: &AssetServer,
+    analysis_state: &super::AiAnalysisState,
+) {
+    let Some(ref analysis) = analysis_state.result else {
+        return;
+    };
+
+    commands
+        .spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                width: Val::Percent(100.0),
+                height: Val::Percent(100.0),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                ..default()
+            },
+            BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.9)),
+            UiMarker,
+            super::AnalysisUiMarker,
+            super::AnalysisResultMarker,
+        ))
+        .with_children(|parent| {
+            // 主容器（可滚动）
+            parent
+                .spawn((
+                    Node {
+                        flex_direction: FlexDirection::Column,
+                        width: Val::Px(700.0),
+                        max_height: Val::Percent(90.0),
+                        padding: UiRect::all(Val::Px(30.0)),
+                        overflow: Overflow::scroll_y(),
+                        ..default()
+                    },
+                    BackgroundColor(Color::srgb(0.12, 0.12, 0.12)),
+                    BorderRadius::all(Val::Px(12.0)),
+                    ScrollPosition::default(),
+                    Interaction::default(),
+                    super::AnalysisScrollContainer,
+                ))
+                .with_children(|parent| {
+                    // 标题栏
+                    spawn_analysis_title_bar(parent, asset_server);
+
+                    // 整体评分
+                    spawn_analysis_overall_rating(parent, asset_server, &analysis.overall_rating);
+
+                    // 开局评价
+                    spawn_analysis_opening_review(parent, asset_server, &analysis.opening_review);
+
+                    // 关键时刻
+                    spawn_analysis_key_moments(parent, asset_server, &analysis.key_moments);
+
+                    // 残局评价
+                    spawn_analysis_endgame_review(parent, asset_server, &analysis.endgame_review);
+
+                    // 不足与提升
+                    spawn_analysis_weaknesses(parent, asset_server, &analysis.weaknesses);
+
+                    // 改进建议
+                    spawn_analysis_suggestions(parent, asset_server, &analysis.suggestions);
+
+                    // 底部按钮
+                    spawn_analysis_bottom_buttons(parent, asset_server);
+                });
+        });
+}
+
+/// 生成分析标题栏
+fn spawn_analysis_title_bar(parent: &mut ChildSpawnerCommands, asset_server: &AssetServer) {
+    parent
+        .spawn(Node {
+            flex_direction: FlexDirection::Row,
+            justify_content: JustifyContent::SpaceBetween,
+            align_items: AlignItems::Center,
+            width: Val::Percent(100.0),
+            margin: UiRect::bottom(Val::Px(20.0)),
+            ..default()
+        })
+        .with_children(|parent| {
+            parent.spawn((
+                Text::new("AI 复盘分析"),
+                TextFont {
+                    font: asset_server.load("fonts/SourceHanSansSC-Bold.otf"),
+                    font_size: 28.0,
+                    ..default()
+                },
+                TextColor(Color::WHITE),
+            ));
+
+            // 关闭按钮
+            parent
+                .spawn((
+                    Button,
+                    Node {
+                        width: Val::Px(36.0),
+                        height: Val::Px(36.0),
+                        justify_content: JustifyContent::Center,
+                        align_items: AlignItems::Center,
+                        ..default()
+                    },
+                    BackgroundColor(Color::srgb(0.3, 0.3, 0.3)),
+                    BorderRadius::all(Val::Px(18.0)),
+                    ButtonAction::CloseAnalysis,
+                ))
+                .with_children(|parent| {
+                    parent.spawn((
+                        Text::new("✕"),
+                        TextFont {
+                            font: asset_server.load("fonts/SourceHanSansSC-Bold.otf"),
+                            font_size: 20.0,
+                            ..default()
+                        },
+                        TextColor(Color::WHITE),
+                    ));
+                });
+        });
+}
+
+/// 生成分析区域容器
+fn spawn_analysis_section<F>(
+    parent: &mut ChildSpawnerCommands,
+    asset_server: &AssetServer,
+    title: &str,
+    content: F,
+) where
+    F: FnOnce(&mut ChildSpawnerCommands),
+{
+    parent
+        .spawn((
+            Node {
+                flex_direction: FlexDirection::Column,
+                width: Val::Percent(100.0),
+                padding: UiRect::all(Val::Px(15.0)),
+                margin: UiRect::bottom(Val::Px(15.0)),
+                ..default()
+            },
+            BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.3)),
+            BorderRadius::all(Val::Px(8.0)),
+        ))
+        .with_children(|parent| {
+            // 区域标题
+            parent.spawn((
+                Text::new(format!("─ {} ─", title)),
+                TextFont {
+                    font: asset_server.load("fonts/SourceHanSansSC-Bold.otf"),
+                    font_size: 16.0,
+                    ..default()
+                },
+                TextColor(Color::srgb(0.6, 0.8, 0.9)),
+                Node {
+                    margin: UiRect::bottom(Val::Px(12.0)),
+                    ..default()
+                },
+            ));
+
+            content(parent);
+        });
+}
+
+/// 生成整体评分区域
+fn spawn_analysis_overall_rating(
+    parent: &mut ChildSpawnerCommands,
+    asset_server: &AssetServer,
+    rating: &chess_ai::llm::OverallRating,
+) {
+    spawn_analysis_section(parent, asset_server, "整体评分", |parent| {
+        // 评分行
+        spawn_analysis_rating_row(parent, asset_server, "红方棋力", rating.red_play_quality);
+        spawn_analysis_rating_row(parent, asset_server, "黑方棋力", rating.black_play_quality);
+        spawn_analysis_rating_row(parent, asset_server, "对局精彩度", rating.game_quality);
+
+        // 总结
+        parent.spawn((
+            Text::new(&rating.summary),
+            TextFont {
+                font: asset_server.load("fonts/SourceHanSansSC-Regular.otf"),
+                font_size: 15.0,
+                ..default()
+            },
+            TextColor(Color::srgb(0.8, 0.8, 0.8)),
+            Node {
+                margin: UiRect::top(Val::Px(10.0)),
+                ..default()
+            },
+        ));
+    });
+}
+
+/// 生成评分行
+fn spawn_analysis_rating_row(
+    parent: &mut ChildSpawnerCommands,
+    asset_server: &AssetServer,
+    label: &str,
+    score: f32,
+) {
+    parent
+        .spawn(Node {
+            flex_direction: FlexDirection::Row,
+            align_items: AlignItems::Center,
+            margin: UiRect::bottom(Val::Px(8.0)),
+            ..default()
+        })
+        .with_children(|parent| {
+            // 标签
+            parent.spawn((
+                Text::new(format!("{}: ", label)),
+                TextFont {
+                    font: asset_server.load("fonts/SourceHanSansSC-Regular.otf"),
+                    font_size: 15.0,
+                    ..default()
+                },
+                TextColor(Color::srgb(0.7, 0.7, 0.7)),
+                Node {
+                    width: Val::Px(100.0),
+                    ..default()
+                },
+            ));
+
+            // 星级
+            let stars = chess_ai::llm::OverallRating::stars(score);
+            parent.spawn((
+                Text::new(stars),
+                TextFont {
+                    font: asset_server.load("fonts/SourceHanSansSC-Regular.otf"),
+                    font_size: 14.0,
+                    ..default()
+                },
+                TextColor(Color::srgb(1.0, 0.84, 0.0)),
+            ));
+
+            // 分数
+            parent.spawn((
+                Text::new(format!(" {:.1}/10", score)),
+                TextFont {
+                    font: asset_server.load("fonts/SourceHanSansSC-Regular.otf"),
+                    font_size: 14.0,
+                    ..default()
+                },
+                TextColor(Color::srgb(0.6, 0.6, 0.6)),
+            ));
+        });
+}
+
+/// 生成开局评价区域
+fn spawn_analysis_opening_review(
+    parent: &mut ChildSpawnerCommands,
+    asset_server: &AssetServer,
+    review: &chess_ai::llm::OpeningReview,
+) {
+    spawn_analysis_section(parent, asset_server, "开局评价", |parent| {
+        if let Some(ref name) = review.name {
+            parent.spawn((
+                Text::new(format!("开局: {}", name)),
+                TextFont {
+                    font: asset_server.load("fonts/SourceHanSansSC-Bold.otf"),
+                    font_size: 15.0,
+                    ..default()
+                },
+                TextColor(Color::srgb(0.9, 0.7, 0.5)),
+                Node {
+                    margin: UiRect::bottom(Val::Px(5.0)),
+                    ..default()
+                },
+            ));
+        }
+
+        parent.spawn((
+            Text::new(format!("评价: {}", review.evaluation)),
+            TextFont {
+                font: asset_server.load("fonts/SourceHanSansSC-Regular.otf"),
+                font_size: 14.0,
+                ..default()
+            },
+            TextColor(Color::srgb(0.7, 0.7, 0.7)),
+            Node {
+                margin: UiRect::bottom(Val::Px(5.0)),
+                ..default()
+            },
+        ));
+
+        parent.spawn((
+            Text::new(&review.comment),
+            TextFont {
+                font: asset_server.load("fonts/SourceHanSansSC-Regular.otf"),
+                font_size: 14.0,
+                ..default()
+            },
+            TextColor(Color::srgb(0.8, 0.8, 0.8)),
+        ));
+    });
+}
+
+/// 生成关键时刻区域
+fn spawn_analysis_key_moments(
+    parent: &mut ChildSpawnerCommands,
+    asset_server: &AssetServer,
+    moments: &[chess_ai::llm::KeyMoment],
+) {
+    spawn_analysis_section(parent, asset_server, "关键时刻", |parent| {
+        if moments.is_empty() {
+            parent.spawn((
+                Text::new("无特别关键的时刻"),
+                TextFont {
+                    font: asset_server.load("fonts/SourceHanSansSC-Regular.otf"),
+                    font_size: 14.0,
+                    ..default()
+                },
+                TextColor(Color::srgb(0.6, 0.6, 0.6)),
+            ));
+            return;
+        }
+
+        for moment in moments {
+            spawn_analysis_key_moment(parent, asset_server, moment);
+        }
+    });
+}
+
+/// 生成单个关键时刻
+fn spawn_analysis_key_moment(
+    parent: &mut ChildSpawnerCommands,
+    asset_server: &AssetServer,
+    moment: &chess_ai::llm::KeyMoment,
+) {
+    let (icon, type_color) = match moment.moment_type {
+        chess_ai::llm::MomentType::Brilliant => ("★", Color::srgb(1.0, 0.84, 0.0)),
+        chess_ai::llm::MomentType::Mistake => ("✗", Color::srgb(0.9, 0.3, 0.3)),
+        chess_ai::llm::MomentType::TurningPoint => ("◆", Color::srgb(0.3, 0.7, 0.9)),
+    };
+
+    let side_name = match moment.side {
+        chess_ai::llm::MomentSide::Red => "红方",
+        chess_ai::llm::MomentSide::Black => "黑方",
+    };
+
+    parent
+        .spawn((
+            Node {
+                flex_direction: FlexDirection::Column,
+                padding: UiRect::all(Val::Px(10.0)),
+                margin: UiRect::bottom(Val::Px(10.0)),
+                ..default()
+            },
+            BackgroundColor(Color::srgba(0.2, 0.2, 0.2, 0.5)),
+            BorderRadius::all(Val::Px(6.0)),
+        ))
+        .with_children(|parent| {
+            // 标题行
+            parent.spawn((
+                Text::new(format!(
+                    "{} 第{}步 {} {}",
+                    icon, moment.move_number, side_name, moment.move_notation
+                )),
+                TextFont {
+                    font: asset_server.load("fonts/SourceHanSansSC-Bold.otf"),
+                    font_size: 14.0,
+                    ..default()
+                },
+                TextColor(type_color),
+                Node {
+                    margin: UiRect::bottom(Val::Px(5.0)),
+                    ..default()
+                },
+            ));
+
+            // 类型标签
+            parent.spawn((
+                Text::new(format!("[{}]", moment.moment_type.display_name())),
+                TextFont {
+                    font: asset_server.load("fonts/SourceHanSansSC-Regular.otf"),
+                    font_size: 12.0,
+                    ..default()
+                },
+                TextColor(type_color),
+                Node {
+                    margin: UiRect::bottom(Val::Px(5.0)),
+                    ..default()
+                },
+            ));
+
+            // 分析
+            parent.spawn((
+                Text::new(&moment.analysis),
+                TextFont {
+                    font: asset_server.load("fonts/SourceHanSansSC-Regular.otf"),
+                    font_size: 13.0,
+                    ..default()
+                },
+                TextColor(Color::srgb(0.8, 0.8, 0.8)),
+            ));
+        });
+}
+
+/// 生成残局评价区域
+fn spawn_analysis_endgame_review(
+    parent: &mut ChildSpawnerCommands,
+    asset_server: &AssetServer,
+    review: &chess_ai::llm::EndgameReview,
+) {
+    spawn_analysis_section(parent, asset_server, "残局评价", |parent| {
+        parent.spawn((
+            Text::new(format!("评价: {}", review.evaluation)),
+            TextFont {
+                font: asset_server.load("fonts/SourceHanSansSC-Regular.otf"),
+                font_size: 14.0,
+                ..default()
+            },
+            TextColor(Color::srgb(0.7, 0.7, 0.7)),
+            Node {
+                margin: UiRect::bottom(Val::Px(5.0)),
+                ..default()
+            },
+        ));
+
+        parent.spawn((
+            Text::new(&review.comment),
+            TextFont {
+                font: asset_server.load("fonts/SourceHanSansSC-Regular.otf"),
+                font_size: 14.0,
+                ..default()
+            },
+            TextColor(Color::srgb(0.8, 0.8, 0.8)),
+        ));
+    });
+}
+
+/// 生成不足与提升区域
+fn spawn_analysis_weaknesses(
+    parent: &mut ChildSpawnerCommands,
+    asset_server: &AssetServer,
+    weaknesses: &chess_ai::llm::Weaknesses,
+) {
+    // 如果双方都没有不足，不显示此区域
+    if weaknesses.red.is_empty() && weaknesses.black.is_empty() {
+        return;
+    }
+
+    spawn_analysis_section(parent, asset_server, "不足与提升", |parent| {
+        // 红方不足
+        if !weaknesses.red.is_empty() {
+            parent.spawn((
+                Text::new("红方不足:"),
+                TextFont {
+                    font: asset_server.load("fonts/SourceHanSansSC-Bold.otf"),
+                    font_size: 14.0,
+                    ..default()
+                },
+                TextColor(Color::srgb(0.9, 0.5, 0.5)),
+                Node {
+                    margin: UiRect::bottom(Val::Px(5.0)),
+                    ..default()
+                },
+            ));
+
+            for weakness in &weaknesses.red {
+                parent.spawn((
+                    Text::new(format!("• {}", weakness)),
+                    TextFont {
+                        font: asset_server.load("fonts/SourceHanSansSC-Regular.otf"),
+                        font_size: 13.0,
+                        ..default()
+                    },
+                    TextColor(Color::srgb(0.8, 0.8, 0.8)),
+                    Node {
+                        margin: UiRect::new(Val::Px(15.0), Val::Px(0.0), Val::Px(0.0), Val::Px(3.0)),
+                        ..default()
+                    },
+                ));
+            }
+        }
+
+        // 黑方不足
+        if !weaknesses.black.is_empty() {
+            parent.spawn((
+                Text::new("黑方不足:"),
+                TextFont {
+                    font: asset_server.load("fonts/SourceHanSansSC-Bold.otf"),
+                    font_size: 14.0,
+                    ..default()
+                },
+                TextColor(Color::srgb(0.5, 0.5, 0.5)),
+                Node {
+                    margin: UiRect::new(Val::Px(0.0), Val::Px(0.0), Val::Px(15.0), Val::Px(5.0)),
+                    ..default()
+                },
+            ));
+
+            for weakness in &weaknesses.black {
+                parent.spawn((
+                    Text::new(format!("• {}", weakness)),
+                    TextFont {
+                        font: asset_server.load("fonts/SourceHanSansSC-Regular.otf"),
+                        font_size: 13.0,
+                        ..default()
+                    },
+                    TextColor(Color::srgb(0.8, 0.8, 0.8)),
+                    Node {
+                        margin: UiRect::new(Val::Px(15.0), Val::Px(0.0), Val::Px(0.0), Val::Px(3.0)),
+                        ..default()
+                    },
+                ));
+            }
+        }
+    });
+}
+
+/// 生成改进建议区域
+fn spawn_analysis_suggestions(
+    parent: &mut ChildSpawnerCommands,
+    asset_server: &AssetServer,
+    suggestions: &chess_ai::llm::Suggestions,
+) {
+    spawn_analysis_section(parent, asset_server, "改进建议", |parent| {
+        // 红方建议
+        if !suggestions.red.is_empty() {
+            parent.spawn((
+                Text::new("给红方:"),
+                TextFont {
+                    font: asset_server.load("fonts/SourceHanSansSC-Bold.otf"),
+                    font_size: 14.0,
+                    ..default()
+                },
+                TextColor(Color::srgb(0.9, 0.5, 0.5)),
+                Node {
+                    margin: UiRect::bottom(Val::Px(5.0)),
+                    ..default()
+                },
+            ));
+
+            for suggestion in &suggestions.red {
+                parent.spawn((
+                    Text::new(format!("• {}", suggestion)),
+                    TextFont {
+                        font: asset_server.load("fonts/SourceHanSansSC-Regular.otf"),
+                        font_size: 13.0,
+                        ..default()
+                    },
+                    TextColor(Color::srgb(0.8, 0.8, 0.8)),
+                    Node {
+                        margin: UiRect::new(Val::Px(15.0), Val::Px(0.0), Val::Px(0.0), Val::Px(3.0)),
+                        ..default()
+                    },
+                ));
+            }
+        }
+
+        // 黑方建议
+        if !suggestions.black.is_empty() {
+            parent.spawn((
+                Text::new("给黑方:"),
+                TextFont {
+                    font: asset_server.load("fonts/SourceHanSansSC-Bold.otf"),
+                    font_size: 14.0,
+                    ..default()
+                },
+                TextColor(Color::srgb(0.5, 0.5, 0.5)),
+                Node {
+                    margin: UiRect::new(Val::Px(0.0), Val::Px(0.0), Val::Px(15.0), Val::Px(5.0)),
+                    ..default()
+                },
+            ));
+
+            for suggestion in &suggestions.black {
+                parent.spawn((
+                    Text::new(format!("• {}", suggestion)),
+                    TextFont {
+                        font: asset_server.load("fonts/SourceHanSansSC-Regular.otf"),
+                        font_size: 13.0,
+                        ..default()
+                    },
+                    TextColor(Color::srgb(0.8, 0.8, 0.8)),
+                    Node {
+                        margin: UiRect::new(Val::Px(15.0), Val::Px(0.0), Val::Px(0.0), Val::Px(3.0)),
+                        ..default()
+                    },
+                ));
+            }
+        }
+
+        if suggestions.red.is_empty() && suggestions.black.is_empty() {
+            parent.spawn((
+                Text::new("暂无具体建议"),
+                TextFont {
+                    font: asset_server.load("fonts/SourceHanSansSC-Regular.otf"),
+                    font_size: 14.0,
+                    ..default()
+                },
+                TextColor(Color::srgb(0.6, 0.6, 0.6)),
+            ));
+        }
+    });
+}
+
+/// 生成底部按钮
+fn spawn_analysis_bottom_buttons(parent: &mut ChildSpawnerCommands, asset_server: &AssetServer) {
+    parent
+        .spawn(Node {
+            flex_direction: FlexDirection::Row,
+            justify_content: JustifyContent::Center,
+            column_gap: Val::Px(15.0),
+            margin: UiRect::top(Val::Px(20.0)),
+            ..default()
+        })
+        .with_children(|parent| {
+            // 关闭按钮
+            parent
+                .spawn((
+                    Button,
+                    Node {
+                        width: Val::Px(140.0),
+                        height: Val::Px(45.0),
+                        justify_content: JustifyContent::Center,
+                        align_items: AlignItems::Center,
+                        ..default()
+                    },
+                    BackgroundColor(Color::srgb(0.3, 0.3, 0.3)),
+                    BorderRadius::all(Val::Px(8.0)),
+                    ButtonAction::CloseAnalysis,
+                ))
+                .with_children(|parent| {
+                    parent.spawn((
+                        Text::new("关闭"),
+                        TextFont {
+                            font: asset_server.load("fonts/SourceHanSansSC-Regular.otf"),
+                            font_size: 18.0,
+                            ..default()
+                        },
+                        TextColor(Color::WHITE),
+                    ));
+                });
+        });
 }

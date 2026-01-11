@@ -1,8 +1,10 @@
 //! 中国象棋客户端入口
 
+use bevy::log::LogPlugin;
 use bevy::prelude::*;
 use bevy::window::WindowResolution;
 use chess_client::ChessClientPlugin;
+use tracing_subscriber::Layer;
 
 fn main() {
     App::new()
@@ -17,7 +19,23 @@ fn main() {
                     }),
                     ..default()
                 })
-                .set(ImagePlugin::default_nearest()),
+                .set(ImagePlugin::default_nearest())
+                .set(LogPlugin {
+                    filter: "wgpu=error,naga=warn,chess_client=debug,chess_ai=debug".to_string(),
+                    level: bevy::log::Level::INFO,
+                    custom_layer: |_app| None,
+                    // 使用自定义 fmt layer 显示文件名和行号
+                    fmt_layer: |_app: &mut App| {
+                        Some(
+                            tracing_subscriber::fmt::layer()
+                                .with_file(true)        // 显示文件名
+                                .with_line_number(true) // 显示行号
+                                .with_target(true)      // 显示模块路径
+                                .with_ansi(true)        // 启用颜色
+                                .boxed(),
+                        )
+                    },
+                }),
         )
         .add_plugins(ChessClientPlugin)
         .add_systems(Startup, setup_camera)

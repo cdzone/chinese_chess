@@ -1,11 +1,14 @@
 //! LLM 走法解析器
 //!
 //! 解析 LLM 返回的 JSON 格式走法，并验证其合法性。
+//! 也支持解析对局复盘分析结果。
 
 use anyhow::{Result, Context, bail};
 use protocol::{BoardState, Move, Position, MoveGenerator};
 use serde::Deserialize;
 use tracing::{debug, warn};
+
+use super::analysis::GameAnalysis;
 
 /// LLM 返回的走法格式
 #[derive(Debug, Deserialize)]
@@ -152,6 +155,45 @@ impl MoveParser {
         // 如果修复后仍失败，尝试原始内容
         Self::parse_and_validate(response, state)
     }
+
+    /// 解析对局复盘分析结果
+    pub fn parse_analysis(response: &str) -> Result<GameAnalysis> {
+        // 先尝试修复
+        let fixed = Self::try_fix_response(response);
+
+        // 尝试直接解析
+        if let Ok(analysis) = serde_json::from_str::<GameAnalysis>(&fixed) {
+            return Ok(analysis);
+        }
+
+        // 尝试提取 JSON 部分
+        let json_str = Self::extract_json(&fixed)
+            .context("Failed to extract JSON from analysis response")?;
+
+        serde_json::from_str(&json_str)
+            .context("Failed to parse analysis JSON")
+    }
+
+    /// 解析分析结果，失败时返回默认值
+    pub fn parse_analysis_with_fallback(response: &str) -> GameAnalysis {
+        match Self::parse_analysis(response) {
+            Ok(analysis) => analysis,
+            Err(e) => {
+                warn!("Failed to parse analysis response: {}", e);
+                // 打印响应前 500 字符帮助调试
+                let preview: String = response.chars().take(500).collect();
+                warn!("Response preview: {}", preview);
+                
+                // 返回默认分析，包含原始响应作为总结
+                let mut default = GameAnalysis::default();
+                default.overall_rating.summary = format!(
+                    "无法解析 LLM 响应。原始回复：{}",
+                    response.chars().take(200).collect::<String>()
+                );
+                default
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -257,5 +299,77 @@ mod tests {
         let result = MoveParser::extract_json(text);
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), r#"{"outer": {"inner": 1}}"#);
+    }
+
+    #[test]
+    fn test_parse_analysis() {
+        let response = r#"{
+            "opening_review": {
+                "name": "中炮对屏风马",
+                "evaluation": "好",
+                "comment": "标准开局"
+            },
+            "key_moments": [
+                {
+                    "move_number": 15,
+                    "side": "red",
+                    "move": "車一進三",
+                    "type": "brilliant",
+                    "analysis": "精彩的弃子战术"
+                }
+            ],
+            "endgame_review": {
+                "evaluation": "好",
+                "comment": "残局处理得当"
+            },
+            "suggestions": {
+                "red": ["注意防守"],
+                "black": ["加强中局计算"]
+            },
+            "overall_rating": {
+                "red_play_quality": 7.5,
+                "black_play_quality": 6.0,
+                "game_quality": 7.0,
+                "summary": "精彩对局"
+            }
+        }"#;
+
+        let result = MoveParser::parse_analysis(response);
+        assert!(result.is_ok());
+
+        let analysis = result.unwrap();
+        assert_eq!(analysis.opening_review.name, Some("中炮对屏风马".to_string()));
+        assert_eq!(analysis.key_moments.len(), 1);
+        assert_eq!(analysis.overall_rating.red_play_quality, 7.5);
+    }
+
+    #[test]
+    fn test_parse_analysis_with_markdown() {
+        let response = r#"```json
+{
+    "opening_review": {"evaluation": "中", "comment": "一般"},
+    "key_moments": [],
+    "endgame_review": {"evaluation": "中", "comment": "一般"},
+    "suggestions": {"red": [], "black": []},
+    "overall_rating": {
+        "red_play_quality": 5.0,
+        "black_play_quality": 5.0,
+        "game_quality": 5.0,
+        "summary": "测试"
+    }
+}
+```"#;
+
+        let result = MoveParser::parse_analysis(response);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_parse_analysis_with_fallback() {
+        let invalid_response = "这不是有效的 JSON";
+        let analysis = MoveParser::parse_analysis_with_fallback(invalid_response);
+        
+        // 应该返回默认值
+        assert!(analysis.overall_rating.summary.contains("无法解析"));
     }
 }

@@ -355,6 +355,12 @@ pub struct GameSettings {
     /// 默认昵称
     pub nickname: String,
 
+    // === LLM 设置 ===
+    /// Ollama 服务地址
+    pub llm_base_url: String,
+    /// LLM 模型名称
+    pub llm_model: String,
+
     // === 高级设置 ===
     /// 日志级别
     pub log_level: LogLevel,
@@ -387,6 +393,10 @@ impl Default for GameSettings {
             // 网络设置
             server_address: "127.0.0.1:9527".to_string(),
             nickname: "玩家".to_string(),
+
+            // LLM 设置
+            llm_base_url: "http://localhost:11434".to_string(),
+            llm_model: "qwen3:30b-a3b".to_string(),
 
             // 高级设置
             log_level: LogLevel::default(),

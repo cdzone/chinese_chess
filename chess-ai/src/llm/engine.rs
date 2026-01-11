@@ -3,6 +3,7 @@
 //! 使用 LLM 作为象棋 AI 后端，支持：
 //! - 走法生成
 //! - 对局总结
+//! - 对局复盘分析
 
 use anyhow::{Result, bail};
 use protocol::{BoardState, Move};
@@ -11,6 +12,7 @@ use protocol::{BoardState, Move};
 use tracing::{info, warn, debug};
 
 use super::{OllamaClient, OllamaConfig};
+use super::analysis::GameAnalysis;
 #[cfg(feature = "llm")]
 use super::{PromptTemplate, MoveParser};
 
@@ -64,10 +66,21 @@ impl LlmEngine {
         self.client.set_model(model);
     }
 
-    /// 检查服务是否可用
+    /// 检查服务是否可用，返回具体错误信息
+    #[cfg(feature = "llm")]
+    pub async fn check_available(&self) -> Result<()> {
+        self.client.health_check().await
+    }
+
+    /// 检查服务是否可用（简化版，仅返回 bool）
     #[cfg(feature = "llm")]
     pub async fn is_available(&self) -> bool {
-        self.client.health_check().await.unwrap_or(false)
+        self.client.health_check().await.is_ok()
+    }
+
+    #[cfg(not(feature = "llm"))]
+    pub async fn check_available(&self) -> Result<()> {
+        Err(anyhow::anyhow!("LLM feature not enabled"))
     }
 
     #[cfg(not(feature = "llm"))]
@@ -134,23 +147,87 @@ impl LlmEngine {
     pub async fn generate_summary(&self, _state: &BoardState, _result: &str) -> Result<String> {
         bail!("LLM feature not enabled. Compile with --features llm")
     }
+
+    /// 生成对局复盘分析（异步）
+    /// 
+    /// 返回结构化的对局分析报告，包括：
+    /// - 开局评价
+    /// - 关键时刻（精彩/失误/转折点）
+    /// - 残局评价
+    /// - 改进建议
+    /// - 整体评分
+    #[cfg(feature = "llm")]
+    pub async fn analyze_game(
+        &self,
+        state: &BoardState,
+        result: &str,
+        red_player: &str,
+        black_player: &str,
+    ) -> Result<GameAnalysis> {
+        let system = PromptTemplate::analysis_system_prompt();
+        let prompt = PromptTemplate::game_analysis_prompt(
+            state,
+            &self.move_history,
+            result,
+            red_player,
+            black_player,
+        );
+
+        info!("Generating game analysis with LLM, {} moves", self.move_history.len());
+        debug!("Analysis prompt length: {} chars", prompt.len());
+
+        for attempt in 1..=self.max_retries {
+            info!("Game analysis attempt {}/{}", attempt, self.max_retries);
+
+            match self.client.generate(&prompt, Some(system)).await {
+                Ok(response) => {
+                    debug!("LLM analysis response length: {} chars", response.len());
+
+                    match MoveParser::parse_analysis(&response) {
+                        Ok(analysis) => {
+                            info!("Successfully parsed game analysis");
+                            return Ok(analysis);
+                        }
+                        Err(e) => {
+                            warn!("Failed to parse analysis response (attempt {}): {}", attempt, e);
+                            let preview: String = response.chars().take(500).collect();
+                            warn!("Response preview: {}", preview);
+                        }
+                    }
+                }
+                Err(e) => {
+                    warn!("LLM analysis request failed (attempt {}): {}", attempt, e);
+                }
+            }
+        }
+
+        // 所有重试失败后，返回带有错误信息的默认分析
+        warn!("All analysis attempts failed, returning default analysis");
+        Ok(GameAnalysis::default())
+    }
+
+    #[cfg(not(feature = "llm"))]
+    pub async fn analyze_game(
+        &self,
+        _state: &BoardState,
+        _result: &str,
+        _red_player: &str,
+        _black_player: &str,
+    ) -> Result<GameAnalysis> {
+        bail!("LLM feature not enabled. Compile with --features llm")
+    }
 }
 
 /// AI 后端类型
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub enum AiBackend {
     /// 传统搜索算法（Alpha-Beta）
+    #[default]
     Traditional,
     /// LLM（需要 Ollama）
     Llm,
     /// 混合模式：LLM 失败时回退到传统算法
     Hybrid,
-}
-
-impl Default for AiBackend {
-    fn default() -> Self {
-        Self::Traditional
-    }
 }
 
 #[cfg(test)]

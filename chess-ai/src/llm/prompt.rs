@@ -4,6 +4,7 @@
 //! - 系统提示（角色设定）
 //! - 棋局状态格式化
 //! - 走法请求格式
+//! - 对局复盘分析格式
 
 use protocol::{Board, BoardState, Move, Side, Piece, Notation, Fen};
 
@@ -191,6 +192,113 @@ impl PromptTemplate {
         
         prompt
     }
+
+    /// 生成对局复盘分析提示（结构化 JSON 输出）
+    pub fn game_analysis_prompt(
+        state: &BoardState,
+        move_history: &[Move],
+        result: &str,
+        red_player: &str,
+        black_player: &str,
+    ) -> String {
+        let mut prompt = String::new();
+
+        prompt.push_str("请对以下中国象棋对局进行复盘分析：\n\n");
+
+        // 对局信息
+        prompt.push_str("对局信息：\n");
+        prompt.push_str(&format!("- 红方：{}\n", red_player));
+        prompt.push_str(&format!("- 黑方：{}\n", black_player));
+        prompt.push_str(&format!("- 结果：{}\n", result));
+        prompt.push_str(&format!("- 总步数：{}\n\n", move_history.len()));
+
+        // 完整走法历史（带中文记谱）
+        prompt.push_str("完整走法记录：\n");
+        let mut temp_board = Board::initial();
+        for (i, mv) in move_history.iter().enumerate() {
+            let notation = Notation::to_chinese(&temp_board, mv)
+                .unwrap_or_else(|| format!("({},{})->({},{})", mv.from.x, mv.from.y, mv.to.x, mv.to.y));
+
+            if i % 2 == 0 {
+                prompt.push_str(&format!("{}. {}", i / 2 + 1, notation));
+            } else {
+                prompt.push_str(&format!("  {}\n", notation));
+            }
+
+            // 更新临时棋盘
+            temp_board.move_piece(mv.from, mv.to);
+        }
+        if move_history.len() % 2 == 1 {
+            prompt.push('\n');
+        }
+        prompt.push('\n');
+
+        // 最终棋盘状态
+        prompt.push_str("最终棋盘状态：\n");
+        prompt.push_str(&Self::visualize_board(&state.board));
+        prompt.push('\n');
+
+        // 请求结构化 JSON 输出
+        prompt.push_str("请从以下几个方面进行分析，并以严格的 JSON 格式返回：\n\n");
+        prompt.push_str(r#"{
+  "opening_review": {
+    "name": "开局名称（如有，如'中炮对屏风马'，没有则为null）",
+    "evaluation": "好/中/差",
+    "comment": "开局阶段点评"
+  },
+  "key_moments": [
+    {
+      "move_number": 步数,
+      "side": "red或black",
+      "move": "走法记号如'車一進三'",
+      "type": "brilliant或mistake或turning_point",
+      "analysis": "这步棋的分析说明"
+    }
+  ],
+  "endgame_review": {
+    "evaluation": "好/中/差",
+    "comment": "残局阶段点评"
+  },
+  "weaknesses": {
+    "red": ["红方的不足1：具体描述哪些方面需要提升", "不足2"],
+    "black": ["黑方的不足1：具体描述哪些方面需要提升", "不足2"]
+  },
+  "suggestions": {
+    "red": ["给红方的改进建议1", "建议2"],
+    "black": ["给黑方的改进建议1", "建议2"]
+  },
+  "overall_rating": {
+    "red_play_quality": 0-10的评分,
+    "black_play_quality": 0-10的评分,
+    "game_quality": 0-10的评分,
+    "summary": "整体对局总结"
+  }
+}
+"#);
+
+        prompt.push_str("\n注意：\n");
+        prompt.push_str("- key_moments 最多选取 5 个最重要的时刻\n");
+        prompt.push_str("- weaknesses 指出双方在本局中暴露的不足，即使获胜方也要分析其可改进之处\n");
+        prompt.push_str("- suggestions 给出针对性的提升建议\n");
+        prompt.push_str("- 评分使用 0-10 的浮点数\n");
+        prompt.push_str("- 只返回 JSON，不要其他文字\n");
+
+        prompt
+    }
+
+    /// 复盘分析的系统提示
+    pub fn analysis_system_prompt() -> &'static str {
+        r#"你是一位资深的中国象棋教练和分析师。你的任务是对完整的象棋对局进行复盘分析，帮助棋手提高棋力。
+
+分析要点：
+1. 开局评价：识别开局类型，评价双方布局是否合理
+2. 关键时刻：找出对局中的精彩走法、失误和转折点
+3. 残局评价：评价残局阶段的处理
+4. 改进建议：针对双方给出具体、可操作的提升建议
+5. 整体评分：客观评价双方的棋力表现
+
+请严格按照要求的 JSON 格式返回分析结果。"#
+    }
 }
 
 #[cfg(test)]
@@ -238,5 +346,32 @@ mod tests {
         assert!(prompt.contains("对局进行总结分析"));
         assert!(prompt.contains("红方胜"));
         assert!(prompt.contains("开局阶段评价"));
+    }
+
+    #[test]
+    fn test_game_analysis_prompt() {
+        let state = BoardState::initial();
+        let moves = vec![
+            Move::new(Position::new_unchecked(1, 2), Position::new_unchecked(4, 2)),
+            Move::new(Position::new_unchecked(1, 7), Position::new_unchecked(2, 5)),
+        ];
+        let prompt = PromptTemplate::game_analysis_prompt(
+            &state, &moves, "红方胜（将死）", "玩家1", "AI-困难"
+        );
+
+        assert!(prompt.contains("复盘分析"));
+        assert!(prompt.contains("红方：玩家1"));
+        assert!(prompt.contains("黑方：AI-困难"));
+        assert!(prompt.contains("opening_review"));
+        assert!(prompt.contains("key_moments"));
+        assert!(prompt.contains("overall_rating"));
+    }
+
+    #[test]
+    fn test_analysis_system_prompt() {
+        let prompt = PromptTemplate::analysis_system_prompt();
+        assert!(prompt.contains("中国象棋教练"));
+        assert!(prompt.contains("复盘分析"));
+        assert!(prompt.contains("JSON"));
     }
 }

@@ -244,9 +244,14 @@ impl ClientGame {
         }
     }
 
-    /// 是否可以悔棋
+    /// 是否可以悔棋（游戏进行中）
     pub fn can_undo(&self) -> bool {
         !self.move_history.is_empty() && self.game_result.is_none()
+    }
+
+    /// 是否可以在终盘悔棋（游戏结束后）
+    pub fn can_undo_at_game_over(&self) -> bool {
+        !self.move_history.is_empty()
     }
 
     /// 是否是 PvE 模式（包括本地和在线）
