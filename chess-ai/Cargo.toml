@@ -6,11 +6,19 @@ edition.workspace = true
 [dependencies]
 protocol = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 anyhow = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 rand = { workspace = true }
 rand_chacha = "0.3"
+reqwest = { version = "0.12", features = ["json"], optional = true }
+tokio = { workspace = true, optional = true }
+
+[features]
+default = []
+llm = ["reqwest", "tokio"]
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }
+tracing-subscriber = "0.3"
