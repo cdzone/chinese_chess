@@ -75,6 +75,8 @@ pub enum SettingsAction {
     ToggleMoveHints,
     BoardFlipPrev,
     BoardFlipNext,
+    PieceShapePrev,
+    PieceShapeNext,
     // 显示设置
     ResolutionPrev,
     ResolutionNext,
@@ -313,6 +315,17 @@ fn spawn_game_settings(
         "board_flip",
         SettingsAction::BoardFlipPrev,
         SettingsAction::BoardFlipNext,
+    );
+
+    // 棋子形状
+    spawn_setting_row(
+        parent,
+        asset_server,
+        "棋子形状",
+        settings.piece_shape.display_name(),
+        "piece_shape",
+        SettingsAction::PieceShapePrev,
+        SettingsAction::PieceShapeNext,
     );
 }
 
@@ -907,6 +920,12 @@ fn handle_settings_action(
         SettingsAction::BoardFlipNext => {
             temp_settings.0.board_flip = temp_settings.0.board_flip.next();
         }
+        SettingsAction::PieceShapePrev => {
+            temp_settings.0.piece_shape = temp_settings.0.piece_shape.prev();
+        }
+        SettingsAction::PieceShapeNext => {
+            temp_settings.0.piece_shape = temp_settings.0.piece_shape.next();
+        }
         // 显示设置
         SettingsAction::ResolutionPrev => {
             temp_settings.0.resolution = temp_settings.0.resolution.prev();
@@ -1004,6 +1023,7 @@ pub fn update_settings_display(
                 .to_string()
             }
             "board_flip" => temp_settings.0.board_flip.display_name().to_string(),
+            "piece_shape" => temp_settings.0.piece_shape.display_name().to_string(),
             "resolution" => temp_settings.0.resolution.display_name().to_string(),
             "fullscreen" => temp_settings.0.fullscreen_mode.display_name().to_string(),
             "vsync" => {

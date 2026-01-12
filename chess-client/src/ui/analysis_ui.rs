@@ -5,6 +5,7 @@
 use bevy::prelude::*;
 
 use super::{ButtonAction, UiMarker, NORMAL_BUTTON, HOVERED_BUTTON, PRESSED_BUTTON};
+use crate::icons;
 
 /// AI 分析 UI 标记
 #[derive(Component)]
@@ -80,7 +81,7 @@ pub fn setup_analysis_loading_ui(mut commands: Commands, asset_server: Res<Asset
 
                     // 加载动画
                     parent.spawn((
-                        Text::new("◎ AI 正在分析对局..."),
+                        Text::new(format!("{} AI 正在分析对局...", icons::INFO)),
                         TextFont {
                             font: asset_server.load("fonts/SourceHanSansSC-Regular.otf"),
                             font_size: 24.0,
@@ -246,10 +247,10 @@ fn spawn_title_bar(parent: &mut ChildSpawnerCommands, asset_server: &AssetServer
                 ))
                 .with_children(|parent| {
                     parent.spawn((
-                        Text::new("✕"),
+                        Text::new(icons::CLOSE),
                         TextFont {
                             font: asset_server.load("fonts/SourceHanSansSC-Bold.otf"),
-                            font_size: 20.0,
+                            font_size: 24.0,
                             ..default()
                         },
                         TextColor(Color::WHITE),
@@ -424,9 +425,9 @@ fn spawn_key_moment(
     moment: &chess_ai::llm::KeyMoment,
 ) {
     let (icon, type_color) = match moment.moment_type {
-        chess_ai::llm::MomentType::Brilliant => ("★", Color::srgb(1.0, 0.84, 0.0)),
-        chess_ai::llm::MomentType::Mistake => ("✗", Color::srgb(0.9, 0.3, 0.3)),
-        chess_ai::llm::MomentType::TurningPoint => ("◆", Color::srgb(0.3, 0.7, 0.9)),
+        chess_ai::llm::MomentType::Brilliant => (icons::BRILLIANT, Color::srgb(1.0, 0.84, 0.0)),
+        chess_ai::llm::MomentType::Mistake => (icons::MISTAKE, Color::srgb(0.9, 0.3, 0.3)),
+        chess_ai::llm::MomentType::TurningPoint => (icons::TURNING_POINT, Color::srgb(0.3, 0.7, 0.9)),
     };
 
     let side_name = match moment.side {

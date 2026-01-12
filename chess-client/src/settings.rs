@@ -271,6 +271,36 @@ impl FrameRateLimit {
     }
 }
 
+/// 棋子形状
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum PieceShape {
+    /// 圆形（传统样式）
+    #[default]
+    Round,
+    /// 方形（现代样式）
+    Square,
+}
+
+impl PieceShape {
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            PieceShape::Round => "圆形",
+            PieceShape::Square => "方形",
+        }
+    }
+
+    pub fn next(self) -> Self {
+        match self {
+            PieceShape::Round => PieceShape::Square,
+            PieceShape::Square => PieceShape::Round,
+        }
+    }
+
+    pub fn prev(self) -> Self {
+        self.next() // 只有两个选项，prev 和 next 效果相同
+    }
+}
+
 /// 日志级别
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum LogLevel {
@@ -330,6 +360,9 @@ pub struct GameSettings {
     pub show_move_hints: bool,
     /// 翻转棋盘
     pub board_flip: BoardFlip,
+    /// 棋子形状
+    #[serde(default)]
+    pub piece_shape: PieceShape,
 
     // === 显示设置 ===
     /// 窗口分辨率
@@ -378,6 +411,7 @@ impl Default for GameSettings {
             animation_speed: 1.0,
             show_move_hints: true,
             board_flip: BoardFlip::default(),
+            piece_shape: PieceShape::default(),
 
             // 显示设置
             resolution: Resolution::default(),

@@ -5,6 +5,8 @@ use bevy::prelude::*;
 
 use super::{ButtonAction, GameUiMarker, UiMarker, NORMAL_BUTTON, HOVERED_BUTTON, PRESSED_BUTTON};
 use crate::game::{AiThinkingState, ClientGame, GameEvent};
+#[cfg(feature = "llm")]
+use crate::icons;
 use crate::network::NetworkEvent;
 use crate::GameState;
 
@@ -897,6 +899,7 @@ pub fn cleanup_game_over_ui(mut commands: Commands, query: Query<Entity, With<Ga
 }
 
 /// 处理游戏结束界面的按钮点击
+#[allow(unused_variables, unused_mut)] // 部分参数仅在 llm feature 启用时使用
 pub fn handle_game_over_buttons(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
@@ -928,6 +931,7 @@ pub fn handle_game_over_buttons(
                     ButtonAction::ExportGame => {
                         export_game_record(&game, &settings);
                     }
+                    #[cfg(feature = "llm")]
                     ButtonAction::AiAnalysis => {
                         tracing::info!("AI Analysis clicked");
                         // 设置分析状态
@@ -1004,11 +1008,17 @@ pub fn handle_game_over_buttons(
     }
 }
 
+// ============================================================================
+// LLM 分析功能（仅在启用 llm feature 时编译）
+// ============================================================================
+
 /// AI 分析任务组件
+#[cfg(feature = "llm")]
 #[derive(Component)]
 pub struct AiAnalysisTask(pub bevy::tasks::Task<Result<chess_ai::llm::GameAnalysis, String>>);
 
 /// 启动 AI 分析任务
+#[cfg(feature = "llm")]
 fn start_ai_analysis(
     game: &ClientGame,
     settings: &crate::settings::GameSettings,
@@ -1122,6 +1132,7 @@ fn start_ai_analysis(
 }
 
 /// 直接生成加载界面（不使用系统）
+#[cfg(feature = "llm")]
 fn spawn_analysis_loading_ui(commands: &mut Commands, asset_server: &AssetServer) {
     commands
         .spawn((
@@ -1168,7 +1179,7 @@ fn spawn_analysis_loading_ui(commands: &mut Commands, asset_server: &AssetServer
 
                     // 加载动画
                     parent.spawn((
-                        Text::new("◎ AI 正在分析对局..."),
+                        Text::new(format!("{} AI 正在分析对局...", icons::INFO)),
                         TextFont {
                             font: asset_server.load("fonts/SourceHanSansSC-Regular.otf"),
                             font_size: 24.0,
@@ -1227,6 +1238,7 @@ fn spawn_analysis_loading_ui(commands: &mut Commands, asset_server: &AssetServer
 }
 
 /// 轮询 AI 分析任务结果
+#[cfg(feature = "llm")]
 pub fn poll_ai_analysis_task(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
@@ -1252,7 +1264,9 @@ pub fn poll_ai_analysis_task(
 
             match result {
                 Some(Ok(analysis)) => {
-                    analysis_state.result = Some(analysis);
+                    // 对 LLM 返回的内容进行 Emoji 替换，确保字体兼容
+                    let sanitized = icons::sanitize_analysis(analysis);
+                    analysis_state.result = Some(sanitized);
                     // 显示结果界面
                     spawn_analysis_result_ui(&mut commands, &asset_server, &analysis_state);
                 }
@@ -1273,6 +1287,7 @@ pub fn poll_ai_analysis_task(
 }
 
 /// 生成分析错误界面
+#[cfg(feature = "llm")]
 fn spawn_analysis_error_ui(
     commands: &mut Commands,
     asset_server: &AssetServer,
@@ -1308,7 +1323,7 @@ fn spawn_analysis_error_ui(
                 .with_children(|parent| {
                     // 错误图标
                     parent.spawn((
-                        Text::new("❌"),
+                        Text::new(icons::ERROR),
                         TextFont {
                             font: asset_server.load("fonts/SourceHanSansSC-Bold.otf"),
                             font_size: 48.0,
@@ -1397,6 +1412,7 @@ fn spawn_analysis_error_ui(
 }
 
 /// 直接生成分析结果界面
+#[cfg(feature = "llm")]
 fn spawn_analysis_result_ui(
     commands: &mut Commands,
     asset_server: &AssetServer,
@@ -1468,6 +1484,7 @@ fn spawn_analysis_result_ui(
 }
 
 /// 生成分析标题栏
+#[cfg(feature = "llm")]
 fn spawn_analysis_title_bar(parent: &mut ChildSpawnerCommands, asset_server: &AssetServer) {
     parent
         .spawn(Node {
@@ -1506,10 +1523,10 @@ fn spawn_analysis_title_bar(parent: &mut ChildSpawnerCommands, asset_server: &As
                 ))
                 .with_children(|parent| {
                     parent.spawn((
-                        Text::new("✕"),
+                        Text::new(icons::CLOSE),
                         TextFont {
                             font: asset_server.load("fonts/SourceHanSansSC-Bold.otf"),
-                            font_size: 20.0,
+                            font_size: 24.0,
                             ..default()
                         },
                         TextColor(Color::WHITE),
@@ -1519,6 +1536,7 @@ fn spawn_analysis_title_bar(parent: &mut ChildSpawnerCommands, asset_server: &As
 }
 
 /// 生成分析区域容器
+#[cfg(feature = "llm")]
 fn spawn_analysis_section<F>(
     parent: &mut ChildSpawnerCommands,
     asset_server: &AssetServer,
@@ -1560,6 +1578,7 @@ fn spawn_analysis_section<F>(
 }
 
 /// 生成整体评分区域
+#[cfg(feature = "llm")]
 fn spawn_analysis_overall_rating(
     parent: &mut ChildSpawnerCommands,
     asset_server: &AssetServer,
@@ -1589,6 +1608,7 @@ fn spawn_analysis_overall_rating(
 }
 
 /// 生成评分行
+#[cfg(feature = "llm")]
 fn spawn_analysis_rating_row(
     parent: &mut ChildSpawnerCommands,
     asset_server: &AssetServer,
@@ -1644,6 +1664,7 @@ fn spawn_analysis_rating_row(
 }
 
 /// 生成开局评价区域
+#[cfg(feature = "llm")]
 fn spawn_analysis_opening_review(
     parent: &mut ChildSpawnerCommands,
     asset_server: &AssetServer,
@@ -1693,6 +1714,7 @@ fn spawn_analysis_opening_review(
 }
 
 /// 生成关键时刻区域
+#[cfg(feature = "llm")]
 fn spawn_analysis_key_moments(
     parent: &mut ChildSpawnerCommands,
     asset_server: &AssetServer,
@@ -1719,15 +1741,16 @@ fn spawn_analysis_key_moments(
 }
 
 /// 生成单个关键时刻
+#[cfg(feature = "llm")]
 fn spawn_analysis_key_moment(
     parent: &mut ChildSpawnerCommands,
     asset_server: &AssetServer,
     moment: &chess_ai::llm::KeyMoment,
 ) {
     let (icon, type_color) = match moment.moment_type {
-        chess_ai::llm::MomentType::Brilliant => ("★", Color::srgb(1.0, 0.84, 0.0)),
-        chess_ai::llm::MomentType::Mistake => ("✗", Color::srgb(0.9, 0.3, 0.3)),
-        chess_ai::llm::MomentType::TurningPoint => ("◆", Color::srgb(0.3, 0.7, 0.9)),
+        chess_ai::llm::MomentType::Brilliant => (icons::BRILLIANT, Color::srgb(1.0, 0.84, 0.0)),
+        chess_ai::llm::MomentType::Mistake => (icons::MISTAKE, Color::srgb(0.9, 0.3, 0.3)),
+        chess_ai::llm::MomentType::TurningPoint => (icons::TURNING_POINT, Color::srgb(0.3, 0.7, 0.9)),
     };
 
     let side_name = match moment.side {
@@ -1794,6 +1817,7 @@ fn spawn_analysis_key_moment(
 }
 
 /// 生成残局评价区域
+#[cfg(feature = "llm")]
 fn spawn_analysis_endgame_review(
     parent: &mut ChildSpawnerCommands,
     asset_server: &AssetServer,
@@ -1827,6 +1851,7 @@ fn spawn_analysis_endgame_review(
 }
 
 /// 生成不足与提升区域
+#[cfg(feature = "llm")]
 fn spawn_analysis_weaknesses(
     parent: &mut ChildSpawnerCommands,
     asset_server: &AssetServer,
@@ -1907,6 +1932,7 @@ fn spawn_analysis_weaknesses(
 }
 
 /// 生成改进建议区域
+#[cfg(feature = "llm")]
 fn spawn_analysis_suggestions(
     parent: &mut ChildSpawnerCommands,
     asset_server: &AssetServer,
@@ -1994,6 +2020,7 @@ fn spawn_analysis_suggestions(
 }
 
 /// 生成底部按钮
+#[cfg(feature = "llm")]
 fn spawn_analysis_bottom_buttons(parent: &mut ChildSpawnerCommands, asset_server: &AssetServer) {
     parent
         .spawn(Node {

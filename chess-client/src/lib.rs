@@ -4,6 +4,7 @@
 
 pub mod board;
 pub mod game;
+pub mod icons;
 pub mod network;
 pub mod settings;
 pub mod storage;

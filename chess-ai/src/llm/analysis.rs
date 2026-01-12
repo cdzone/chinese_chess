@@ -92,11 +92,12 @@ pub enum MomentType {
 
 impl MomentType {
     /// 获取显示图标
+    /// 使用 SourceHanSansSC 字体兼容的 Unicode 符号
     pub fn icon(&self) -> &'static str {
         match self {
-            MomentType::Brilliant => "🌟",
-            MomentType::Mistake => "❌",
-            MomentType::TurningPoint => "⚡",
+            MomentType::Brilliant => "★",
+            MomentType::Mistake => "✗",
+            MomentType::TurningPoint => "◆",
         }
     }
 
@@ -207,7 +208,7 @@ mod tests {
 
     #[test]
     fn test_moment_type_display() {
-        assert_eq!(MomentType::Brilliant.icon(), "🌟");
+        assert_eq!(MomentType::Brilliant.icon(), "★");
         assert_eq!(MomentType::Mistake.display_name(), "失误");
         assert_eq!(MomentType::TurningPoint.display_name(), "转折");
     }

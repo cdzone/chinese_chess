@@ -79,7 +79,11 @@ impl Plugin for UiPlugin {
             // 游戏结束
             .add_systems(OnEnter(GameState::GameOver), setup_game_over_ui)
             .add_systems(OnExit(GameState::GameOver), cleanup_game_over_ui)
-            .add_systems(Update, (handle_game_over_buttons, handle_analysis_buttons, poll_ai_analysis_task, handle_analysis_scroll).run_if(in_state(GameState::GameOver)));
+            .add_systems(Update, (handle_game_over_buttons, handle_analysis_buttons, handle_analysis_scroll).run_if(in_state(GameState::GameOver)));
+
+        // LLM 分析轮询系统（仅在启用 llm feature 时注册）
+        #[cfg(feature = "llm")]
+        app.add_systems(Update, poll_ai_analysis_task.run_if(in_state(GameState::GameOver)));
     }
 }
 

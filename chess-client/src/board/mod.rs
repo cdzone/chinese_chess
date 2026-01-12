@@ -10,6 +10,7 @@ pub use pieces::*;
 
 use bevy::prelude::*;
 
+use crate::settings::GameSettings;
 use crate::GameState;
 
 /// 棋盘插件
@@ -143,8 +144,11 @@ fn update_board_on_layout_change(
     layout: Res<BoardLayout>,
     theme: Res<crate::theme::ColorTheme>,
     game: Res<crate::game::ClientGame>,
+    settings: Res<GameSettings>,
     board_query: Query<Entity, With<BoardMarker>>,
     asset_server: Res<AssetServer>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<ColorMaterial>>,
 ) {
     if !layout.is_changed() {
         return;
@@ -160,7 +164,16 @@ fn update_board_on_layout_change(
 
     // 重新生成棋子
     if let Some(state) = &game.game_state {
-        pieces::spawn_pieces(&mut commands, &state.board, &layout, &theme, &asset_server);
+        pieces::spawn_pieces(
+            &mut commands,
+            &state.board,
+            &layout,
+            &theme,
+            &asset_server,
+            settings.piece_shape,
+            &mut meshes,
+            &mut materials,
+        );
     }
 
     // 重新生成高亮
@@ -208,15 +221,18 @@ fn update_pieces(
     game: Res<crate::game::ClientGame>,
     layout: Res<BoardLayout>,
     theme: Res<crate::theme::ColorTheme>,
+    settings: Res<GameSettings>,
     pieces_query: Query<Entity, With<PieceMarker>>,
     asset_server: Res<AssetServer>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<ColorMaterial>>,
 ) {
     // 布局变化时由 update_board_on_layout_change 处理
     if layout.is_changed() {
         return;
     }
-    
-    if !game.is_changed() {
+
+    if !game.is_changed() && !settings.is_changed() {
         return;
     }
 
@@ -227,7 +243,16 @@ fn update_pieces(
 
     // 生成新棋子
     if let Some(state) = &game.game_state {
-        pieces::spawn_pieces(&mut commands, &state.board, &layout, &theme, &asset_server);
+        pieces::spawn_pieces(
+            &mut commands,
+            &state.board,
+            &layout,
+            &theme,
+            &asset_server,
+            settings.piece_shape,
+            &mut meshes,
+            &mut materials,
+        );
     }
 }
 
