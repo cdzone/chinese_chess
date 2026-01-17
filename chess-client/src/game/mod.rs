@@ -100,11 +100,24 @@ fn handle_game_events(
             }
             GameEvent::Resign => {
                 if game.is_local() {
-                    // 本地模式：直接认输
-                    let result = protocol::GameResult::BlackWin(protocol::WinReason::Resign);
+                    // 本地模式：根据玩家执子方决定胜负
+                    let result = match game.player_side {
+                        Some(protocol::Side::Red) => {
+                            // 玩家执红，认输则黑方获胜
+                            protocol::GameResult::BlackWin(protocol::WinReason::Resign)
+                        }
+                        Some(protocol::Side::Black) => {
+                            // 玩家执黑，认输则红方获胜
+                            protocol::GameResult::RedWin(protocol::WinReason::Resign)
+                        }
+                        None => {
+                            // 未知执子方，默认黑方获胜
+                            protocol::GameResult::BlackWin(protocol::WinReason::Resign)
+                        }
+                    };
                     game.set_result(result);
                     game_state.set(GameState::GameOver);
-                    tracing::info!("玩家认输");
+                    tracing::info!("玩家认输，执子方: {:?}", game.player_side);
                 } else {
                     network_events.write(crate::network::NetworkEvent::SendResign);
                 }
