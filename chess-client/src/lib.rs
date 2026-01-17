@@ -26,6 +26,8 @@ pub enum GameState {
     Settings,
     /// 保存的棋局列表
     SavedGames,
+    /// 棋盘编辑器
+    BoardEditor,
     /// 连接服务器
     Connecting,
     /// 房间列表/等待

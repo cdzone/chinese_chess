@@ -27,6 +27,8 @@ pub enum SavedGameAction {
     BackToMenu,
     /// 刷新列表
     Refresh,
+    /// 新建棋局（进入编辑器）
+    NewGame,
 }
 
 /// 保存的棋局列表资源
@@ -122,6 +124,8 @@ pub fn setup_saved_games(
                     ..default()
                 })
                 .with_children(|parent| {
+                    // 新建棋局按钮
+                    spawn_action_button(parent, &asset_server, "新建棋局", SavedGameAction::NewGame);
                     // 刷新按钮
                     spawn_action_button(parent, &asset_server, "刷新", SavedGameAction::Refresh);
                     // 返回按钮
@@ -393,6 +397,9 @@ pub fn handle_saved_games_buttons(
                     }
                     SavedGameAction::Refresh => {
                         refresh_saved_games(&mut saved_games);
+                    }
+                    SavedGameAction::NewGame => {
+                        game_state.set(GameState::BoardEditor);
                     }
                 }
             }

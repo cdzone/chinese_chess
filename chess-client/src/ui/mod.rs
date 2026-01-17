@@ -8,6 +8,7 @@ mod settings_ui;
 mod lobby_ui;
 mod saved_games_ui;
 mod analysis_ui;
+mod board_editor;
 
 pub use menu::*;
 pub use game_ui::*;
@@ -15,6 +16,7 @@ pub use settings_ui::*;
 pub use lobby_ui::*;
 pub use saved_games_ui::*;
 pub use analysis_ui::*;
+pub use board_editor::*;
 
 use bevy::prelude::*;
 use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
@@ -37,6 +39,8 @@ impl Plugin for UiPlugin {
             .init_resource::<SavedGamesList>()
             // 添加 AI 分析状态资源
             .init_resource::<AiAnalysisState>()
+            // 添加棋盘编辑器状态资源
+            .init_resource::<BoardEditorState>()
             // UI 缩放系统（全局运行）
             .add_systems(Update, (update_ui_scale, update_fps_display))
             // 启动时创建 FPS 显示
@@ -52,6 +56,30 @@ impl Plugin for UiPlugin {
                 Update,
                 (handle_saved_games_buttons, update_saved_games_list)
                     .run_if(in_state(GameState::SavedGames)),
+            )
+            // 棋盘编辑器
+            .add_systems(OnEnter(GameState::BoardEditor), setup_board_editor)
+            .add_systems(OnExit(GameState::BoardEditor), cleanup_board_editor)
+            .add_systems(
+                Update,
+                (
+                    handle_editor_buttons,
+                    handle_piece_buttons,
+                    handle_tool_buttons,
+                    handle_board_cell_click,
+                    handle_right_click_delete,
+                    handle_escape_deselect,
+                    handle_first_turn_radio,
+                    handle_opponent_type_radio,
+                    handle_difficulty_radio,
+                    handle_player_side_radio,
+                    update_editor_board,
+                    update_selected_indicator,
+                    update_radio_buttons,
+                    update_ai_settings_visibility,
+                    update_validation_display,
+                )
+                    .run_if(in_state(GameState::BoardEditor)),
             )
             // 大厅（房间列表）
             .add_systems(OnEnter(GameState::Lobby), setup_lobby)

@@ -12,6 +12,8 @@ pub enum GameMode {
     LocalPvE {
         difficulty: Difficulty,
     },
+    /// 本地双人对战（同一设备）
+    LocalPvP,
     /// 在线 AI 对战（AI 在服务端运行，保留作为备选）
     OnlinePvE {
         room_id: RoomId,
@@ -26,7 +28,7 @@ pub enum GameMode {
 impl GameMode {
     /// 是否是本地模式（不需要网络）
     pub fn is_local(&self) -> bool {
-        matches!(self, GameMode::LocalPvE { .. })
+        matches!(self, GameMode::LocalPvE { .. } | GameMode::LocalPvP)
     }
 
     /// 是否是 PvE 模式（包括本地和在线）
@@ -44,14 +46,14 @@ impl GameMode {
         match self {
             GameMode::LocalPvE { difficulty } => Some(*difficulty),
             GameMode::OnlinePvE { difficulty, .. } => Some(*difficulty),
-            GameMode::OnlinePvP { .. } => None,
+            GameMode::OnlinePvP { .. } | GameMode::LocalPvP => None,
         }
     }
 
     /// 获取房间 ID（仅在线模式有效）
     pub fn room_id(&self) -> Option<RoomId> {
         match self {
-            GameMode::LocalPvE { .. } => None,
+            GameMode::LocalPvE { .. } | GameMode::LocalPvP => None,
             GameMode::OnlinePvE { room_id, .. } => Some(*room_id),
             GameMode::OnlinePvP { room_id } => Some(*room_id),
         }
@@ -266,12 +268,17 @@ impl ClientGame {
 
     /// 是否需要 AI 走棋（本地 PvE 模式且轮到 AI）
     pub fn should_ai_move(&self) -> bool {
-        if !self.is_local() || self.is_paused || self.game_result.is_some() {
-            return false;
+        match &self.game_mode {
+            Some(GameMode::LocalPvE { .. }) => {
+                if self.is_paused || self.game_result.is_some() {
+                    return false;
+                }
+                // AI 方是玩家的对手
+                let ai_side = self.player_side.map(|s| s.opponent());
+                self.current_turn() == ai_side
+            }
+            _ => false,
         }
-        // 本地 PvE 模式：玩家是红方，AI 是黑方
-        // 当轮到黑方时，AI 需要走棋
-        self.current_turn() == Some(Side::Black)
     }
 
     /// 获取当前走子方
