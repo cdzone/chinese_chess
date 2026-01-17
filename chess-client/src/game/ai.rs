@@ -113,16 +113,21 @@ fn trigger_ai_compute(
         _ => return,
     };
 
+    // 获取历史局面（用于检测跨回合重复）
+    // 排除最后一个元素（当前局面），避免重复计数
+    let history_len = game.state_history.len().saturating_sub(1);
+    let history_states = game.state_history[..history_len].to_vec();
+
     // 更新思考状态
     thinking_state.is_thinking = true;
     thinking_state.started_at = Some(Instant::now());
 
-    tracing::info!("AI 开始思考... 难度: {:?}", difficulty);
+    tracing::info!("AI 开始思考... 难度: {:?}, 历史局面数: {}", difficulty, history_states.len());
 
     // 在后台线程池中计算（不阻塞渲染）
     let task_pool = AsyncComputeTaskPool::get();
     let task = task_pool.spawn(async move {
-        compute_ai_move(game_state, difficulty)
+        compute_ai_move(game_state, difficulty, history_states)
     });
 
     commands.spawn(AiComputeTask {
@@ -132,9 +137,9 @@ fn trigger_ai_compute(
 }
 
 /// 计算 AI 走法（在后台线程运行）
-fn compute_ai_move(game_state: BoardState, difficulty: Difficulty) -> Option<Move> {
+fn compute_ai_move(game_state: BoardState, difficulty: Difficulty, history_states: Vec<BoardState>) -> Option<Move> {
     let mut engine = AiEngine::from_difficulty(difficulty);
-    engine.search(&game_state)
+    engine.search_with_history(&game_state, &history_states)
 }
 
 /// 轮询 AI 结果（非阻塞）

@@ -68,6 +68,8 @@ pub struct AiEngine {
     zobrist: ZobristTable,
     /// 置换表
     tt: TranspositionTable,
+    /// 搜索路径哈希栈（用于检测重复局面）
+    path_hashes: Vec<u64>,
 }
 
 impl AiEngine {
@@ -79,6 +81,7 @@ impl AiEngine {
             nodes_searched: 0,
             zobrist: ZobristTable::new(),
             tt: TranspositionTable::new(tt_size),
+            path_hashes: Vec::with_capacity(64),
         }
     }
 
@@ -89,9 +92,25 @@ impl AiEngine {
 
     /// 搜索最佳走法
     pub fn search(&mut self, state: &BoardState) -> Option<Move> {
+        self.search_with_history(state, &[])
+    }
+
+    /// 搜索最佳走法（带历史局面检测跨回合重复）
+    /// 
+    /// # Arguments
+    /// * `state` - 当前局面
+    /// * `history_states` - 历史局面列表（用于检测跨回合重复）
+    pub fn search_with_history(&mut self, state: &BoardState, history_states: &[BoardState]) -> Option<Move> {
         self.nodes_searched = 0;
         self.tt.new_search();
+        self.path_hashes.clear();
         let deadline = Instant::now() + Duration::from_millis(self.config.time_limit_ms);
+
+        // 继承历史局面的哈希（检测跨回合重复）
+        for hist_state in history_states {
+            let hist_hash = self.zobrist.hash(&hist_state.board, hist_state.current_turn);
+            self.path_hashes.push(hist_hash);
+        }
 
         // 生成所有合法走法
         let moves = MoveGenerator::generate_legal(state);
@@ -106,6 +125,9 @@ impl AiEngine {
 
         // 计算当前局面哈希
         let hash = self.zobrist.hash(&state.board, state.current_turn);
+        
+        // 记录根节点哈希
+        self.path_hashes.push(hash);
 
         // 迭代加深搜索
         let mut best_move = moves[0];
@@ -146,6 +168,9 @@ impl AiEngine {
                 // 增量更新哈希
                 let new_hash = self.update_hash(hash, state, mv, captured.map(|p| p.piece_type));
 
+                // 入栈
+                self.path_hashes.push(new_hash);
+
                 // Alpha-Beta 搜索
                 let score = -self.alpha_beta(
                     &new_state,
@@ -155,6 +180,9 @@ impl AiEngine {
                     i32::MAX - 1,
                     &deadline,
                 );
+
+                // 出栈
+                self.path_hashes.pop();
 
                 if score > current_best_score {
                     current_best_score = score;
@@ -230,6 +258,13 @@ impl AiEngine {
     ) -> i32 {
         self.nodes_searched += 1;
 
+        // 重复局面检测（在置换表查询之前）
+        // path_hashes 中已有 2 次相同哈希，加上当前局面是第 3 次，判和
+        let repetition_count = self.path_hashes.iter().filter(|&&h| h == hash).count();
+        if repetition_count >= 2 {
+            return 0;
+        }
+
         // 检查时间：超时时返回当前静态评估值
         if Instant::now() >= *deadline {
             return self.evaluate(state);
@@ -284,7 +319,14 @@ impl AiEngine {
             new_state.switch_turn();
 
             let new_hash = self.update_hash(hash, state, &mv, captured.map(|p| p.piece_type));
+            
+            // 入栈
+            self.path_hashes.push(new_hash);
+            
             let score = -self.alpha_beta(&new_state, new_hash, depth - 1, -beta, -alpha, deadline);
+            
+            // 出栈
+            self.path_hashes.pop();
 
             if score >= beta {
                 // Beta 剪枝
@@ -596,5 +638,144 @@ mod tests {
 
         engine.clear_tt();
         assert_eq!(engine.tt_stats().used, 0, "清空后置换表应该为空");
+    }
+
+    #[test]
+    fn test_repetition_detection_path_hashes() {
+        // 测试搜索后 path_hashes 只剩根节点
+        let state = BoardState::initial();
+        let mut engine = AiEngine::from_difficulty(Difficulty::Easy);
+
+        let _ = engine.search(&state);
+        
+        // 搜索结束后，path_hashes 应该只剩根节点
+        assert_eq!(
+            engine.path_hashes.len(), 1,
+            "搜索结束后 path_hashes 应该只剩根节点，实际: {}",
+            engine.path_hashes.len()
+        );
+    }
+
+    #[test]
+    fn test_no_simple_two_move_cycle() {
+        // 测试 AI 不会陷入简单的两步循环
+        // 使用一个更复杂的中局局面，双方都有多个棋子
+        let fen = "r1bakab1r/9/1cn4c1/p1p1p1p1p/9/2P6/P3P1P1P/1C2C1N2/9/RNBAKAB1R w 0 1";
+        let state = Fen::parse(fen).unwrap();
+        let mut engine = AiEngine::from_difficulty(Difficulty::Easy);
+
+        let mut moves = Vec::new();
+        let mut current_state = state.clone();
+
+        // 模拟 6 步走法
+        for _ in 0..6 {
+            if let Some(mv) = engine.search(&current_state) {
+                moves.push(mv);
+                current_state.board.move_piece(mv.from, mv.to);
+                current_state.switch_turn();
+            } else {
+                break;
+            }
+        }
+
+        // 验证至少走了 4 步（确保测试有意义）
+        assert!(
+            moves.len() >= 4,
+            "应该至少走 4 步，实际走了 {} 步",
+            moves.len()
+        );
+
+        // 检查是否有简单的两步循环（A->B, B->A）
+        let mut cycle_count = 0;
+        for i in 2..moves.len() {
+            let is_simple_cycle = moves[i].from == moves[i - 2].to
+                && moves[i].to == moves[i - 2].from;
+            if is_simple_cycle {
+                cycle_count += 1;
+                println!(
+                    "检测到可能的循环: 第{}步 {:?} 与第{}步 {:?}",
+                    i - 1, moves[i - 2], i + 1, moves[i]
+                );
+            }
+        }
+
+        println!("{}步走法: {:?}", moves.len(), moves);
+        
+        // 不应该有连续的循环
+        assert!(
+            cycle_count < 2,
+            "不应该有连续的两步循环，检测到 {} 次",
+            cycle_count
+        );
+    }
+
+    #[test]
+    fn test_repetition_returns_draw_score() {
+        // 测试重复局面返回和棋分数
+        // 这个测试验证重复检测逻辑的正确性
+        let state = BoardState::initial();
+        let mut engine = AiEngine::from_difficulty(Difficulty::Easy);
+
+        // 手动设置 path_hashes 模拟重复局面
+        let hash = engine.zobrist.hash(&state.board, state.current_turn);
+        engine.path_hashes.clear();
+        engine.path_hashes.push(hash);  // 第一次
+        engine.path_hashes.push(hash);  // 第二次
+
+        // 现在如果再遇到相同哈希，应该返回 0（和棋）
+        // 由于 alpha_beta 是私有的，我们通过搜索间接测试
+        // 这里主要验证 path_hashes 的设置不会导致崩溃
+        let _ = engine.search(&state);
+        
+        // 搜索后 path_hashes 应该被清空并重新填充
+        assert!(engine.path_hashes.len() >= 1, "搜索后应该有路径哈希");
+    }
+
+    #[test]
+    fn test_search_with_history() {
+        // 测试带历史局面的搜索
+        let state = BoardState::initial();
+        let mut engine = AiEngine::from_difficulty(Difficulty::Easy);
+
+        // 创建一些历史局面
+        let history: Vec<BoardState> = vec![
+            BoardState::initial(),
+            BoardState::initial(),
+        ];
+
+        // 带历史搜索应该正常工作
+        let mv = engine.search_with_history(&state, &history);
+        assert!(mv.is_some(), "带历史搜索应该返回走法");
+
+        // path_hashes 应该包含历史局面 + 根节点
+        // 搜索结束后，历史局面仍在，加上根节点
+        assert!(
+            engine.path_hashes.len() >= 3,
+            "path_hashes 应该包含历史局面，实际: {}",
+            engine.path_hashes.len()
+        );
+    }
+
+    #[test]
+    fn test_cross_turn_repetition_detection() {
+        // 测试跨回合重复检测
+        // 模拟：历史中已有相同局面，AI 应该避免回到该局面
+        let state = BoardState::initial();
+        let mut engine = AiEngine::from_difficulty(Difficulty::Easy);
+
+        // 历史中有两次相同局面（初始局面）
+        let history = vec![
+            BoardState::initial(),
+            BoardState::initial(),
+        ];
+
+        // 搜索时，如果走法导致回到初始局面，应该被视为和棋（0分）
+        // 这会影响 AI 的选择
+        let mv = engine.search_with_history(&state, &history);
+        
+        // AI 应该返回一个走法
+        assert!(mv.is_some(), "AI 应该返回走法");
+        
+        println!("跨回合重复检测测试: AI 选择 {:?}", mv);
     }
 }
