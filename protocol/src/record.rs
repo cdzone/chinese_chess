@@ -87,10 +87,18 @@ pub struct SaveInfo {
     pub saved_at: DateTime<Utc>,
     /// 游戏状态
     pub game_state: String,
+    /// 玩家执子方
+    #[serde(default = "default_player_side")]
+    pub player_side: String,
     /// 红方剩余时间（毫秒）
     pub red_time_remaining_ms: u64,
     /// 黑方剩余时间（毫秒）
     pub black_time_remaining_ms: u64,
+}
+
+/// 默认玩家执红方（兼容旧存档）
+fn default_player_side() -> String {
+    "red".to_string()
 }
 
 /// 完整的棋谱记录

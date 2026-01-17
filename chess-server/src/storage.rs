@@ -50,6 +50,7 @@ impl StorageManager {
                 protocol::Side::Red => "red_turn".to_string(),
                 protocol::Side::Black => "black_turn".to_string(),
             },
+            player_side: "red".to_string(), // 服务端默认红方
             red_time_remaining_ms: red_time_ms,
             black_time_remaining_ms: black_time_ms,
         });

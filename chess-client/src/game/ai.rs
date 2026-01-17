@@ -159,8 +159,12 @@ fn poll_ai_result(
         if task_component.started_at.elapsed() > Duration::from_secs(ai_timeout_secs) {
             tracing::error!("AI 计算超时（>{}秒），强制终止", ai_timeout_secs);
 
-            // 设置 AI 失败结果（玩家获胜）
-            let result = protocol::GameResult::RedWin(protocol::WinReason::Timeout);
+            // AI 超时，玩家获胜（根据玩家执子方判断）
+            let result = match game.player_side {
+                Some(protocol::Side::Red) => protocol::GameResult::RedWin(protocol::WinReason::Timeout),
+                Some(protocol::Side::Black) => protocol::GameResult::BlackWin(protocol::WinReason::Timeout),
+                None => protocol::GameResult::RedWin(protocol::WinReason::Timeout), // 默认
+            };
             game.set_result(result);
             game_state.set(GameState::GameOver);
 
@@ -201,9 +205,13 @@ fn poll_ai_result(
                 });
             }
             None => {
-                // P1 修复：AI 无合法走法，触发游戏结束
+                // AI 无合法走法（被将死或困毙），玩家胜利
                 tracing::warn!("AI 无法找到合法走法，玩家胜利");
-                let result = protocol::GameResult::RedWin(protocol::WinReason::Checkmate);
+                let result = match game.player_side {
+                    Some(protocol::Side::Red) => protocol::GameResult::RedWin(protocol::WinReason::Checkmate),
+                    Some(protocol::Side::Black) => protocol::GameResult::BlackWin(protocol::WinReason::Checkmate),
+                    None => protocol::GameResult::RedWin(protocol::WinReason::Checkmate), // 默认
+                };
                 game.set_result(result);
                 game_state.set(GameState::GameOver);
             }

@@ -29,6 +29,43 @@ pub enum Difficulty {
     Medium,
     /// 困难：depth=6+
     Hard,
+    /// 自定义：用户指定参数
+    Custom {
+        /// 搜索深度 (1-10)
+        depth: u8,
+        /// 思考时间限制（毫秒）
+        time_limit_ms: u64,
+    },
+}
+
+impl Difficulty {
+    /// 获取搜索深度
+    pub fn depth(&self) -> u8 {
+        match self {
+            Difficulty::Easy => 3,
+            Difficulty::Medium => 4,
+            Difficulty::Hard => 6,
+            Difficulty::Custom { depth, .. } => *depth,
+        }
+    }
+
+    /// 获取时间限制（毫秒）
+    pub fn time_limit_ms(&self) -> u64 {
+        match self {
+            Difficulty::Easy => 1000,
+            Difficulty::Medium => 3000,
+            Difficulty::Hard => 5000,
+            Difficulty::Custom { time_limit_ms, .. } => *time_limit_ms,
+        }
+    }
+
+    /// 创建自定义难度
+    pub fn custom(depth: u8, time_limit_ms: u64) -> Self {
+        Difficulty::Custom {
+            depth: depth.clamp(1, 10),
+            time_limit_ms: time_limit_ms.clamp(100, 60000),
+        }
+    }
 }
 
 /// 游戏结果

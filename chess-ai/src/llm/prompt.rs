@@ -196,6 +196,7 @@ impl PromptTemplate {
     /// 生成对局复盘分析提示（结构化 JSON 输出）
     pub fn game_analysis_prompt(
         state: &BoardState,
+        initial_board: &Board,
         move_history: &[Move],
         result: &str,
         red_player: &str,
@@ -213,8 +214,9 @@ impl PromptTemplate {
         prompt.push_str(&format!("- 总步数：{}\n\n", move_history.len()));
 
         // 完整走法历史（带中文记谱）
+        // 使用传入的初始棋盘而不是标准初始布局
         prompt.push_str("完整走法记录：\n");
-        let mut temp_board = Board::initial();
+        let mut temp_board = initial_board.clone();
         for (i, mv) in move_history.iter().enumerate() {
             let notation = Notation::to_chinese(&temp_board, mv)
                 .unwrap_or_else(|| format!("({},{})->({},{})", mv.from.x, mv.from.y, mv.to.x, mv.to.y));
@@ -351,12 +353,13 @@ mod tests {
     #[test]
     fn test_game_analysis_prompt() {
         let state = BoardState::initial();
+        let initial_board = Board::initial();
         let moves = vec![
             Move::new(Position::new_unchecked(1, 2), Position::new_unchecked(4, 2)),
             Move::new(Position::new_unchecked(1, 7), Position::new_unchecked(2, 5)),
         ];
         let prompt = PromptTemplate::game_analysis_prompt(
-            &state, &moves, "红方胜（将死）", "玩家1", "AI-困难"
+            &state, &initial_board, &moves, "红方胜（将死）", "玩家1", "AI-困难"
         );
 
         assert!(prompt.contains("复盘分析"));

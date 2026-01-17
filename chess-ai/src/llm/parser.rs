@@ -40,12 +40,14 @@ impl MoveParser {
 
     /// 从文本中提取 JSON
     fn extract_json(text: &str) -> Result<String> {
-        // 查找 { 和 } 的位置
+        // 查找 { 的位置
         let start = text.find('{')
             .context("No JSON object found in response")?;
         
         let mut depth = 0;
+        let mut bracket_depth = 0; // 跟踪 [] 的深度
         let mut end = start;
+        let mut found_complete = false;
         
         for (i, ch) in text[start..].char_indices() {
             match ch {
@@ -54,18 +56,64 @@ impl MoveParser {
                     depth -= 1;
                     if depth == 0 {
                         end = start + i + 1;
+                        found_complete = true;
                         break;
                     }
                 }
+                '[' => bracket_depth += 1,
+                ']' => bracket_depth -= 1,
                 _ => {}
             }
+            end = start + i + 1;
         }
         
-        if depth != 0 {
-            bail!("Unbalanced braces in JSON");
+        if found_complete {
+            return Ok(text[start..end].to_string());
         }
         
-        Ok(text[start..end].to_string())
+        // JSON 不完整，尝试补全
+        if depth > 0 {
+            debug!("Attempting to fix incomplete JSON (depth={}, bracket_depth={})", depth, bracket_depth);
+            let mut json = text[start..end].to_string();
+            
+            // 移除可能被截断的最后一个不完整的字段
+            // 查找最后一个完整的逗号或冒号之前的内容
+            if let Some(last_complete) = json.rfind(|c| c == ',' || c == ':') {
+                // 检查后面是否有完整的值
+                let after = &json[last_complete + 1..];
+                let trimmed = after.trim();
+                
+                // 如果是冒号后面，值可能不完整
+                if json.chars().nth(last_complete) == Some(':') {
+                    // 检查是否有完整的值
+                    if !trimmed.ends_with('"') && !trimmed.ends_with('}') && 
+                       !trimmed.ends_with(']') && !trimmed.ends_with(',') &&
+                       !trimmed.parse::<f64>().is_ok() &&
+                       trimmed != "true" && trimmed != "false" && trimmed != "null" {
+                        // 值不完整，截断到这个字段之前
+                        if let Some(prev_comma) = json[..last_complete].rfind(',') {
+                            json.truncate(prev_comma);
+                        }
+                    }
+                } else if json.chars().nth(last_complete) == Some(',') && trimmed.is_empty() {
+                    // 逗号后面为空，移除这个逗号
+                    json.truncate(last_complete);
+                }
+            }
+            
+            // 补全括号
+            for _ in 0..bracket_depth {
+                json.push(']');
+            }
+            for _ in 0..depth {
+                json.push('}');
+            }
+            
+            debug!("Fixed JSON attempt: {}...", json.chars().take(100).collect::<String>());
+            return Ok(json);
+        }
+        
+        bail!("Unbalanced braces in JSON");
     }
 
     /// 将 LLM 走法转换为游戏走法

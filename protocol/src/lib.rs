@@ -22,7 +22,7 @@ mod transport;
 pub use board::{Board, BoardState};
 pub use constants::*;
 pub use error::{ChessError, ProtocolError, Result};
-pub use fen::Fen;
+pub use fen::{Fen, INITIAL_FEN};
 pub use message::{
     ClientMessage, ServerMessage, ErrorCode, RoomInfo, RoomType, RoomState,
     GameResult, WinReason, DrawReason, Difficulty, PlayerId, RoomId,

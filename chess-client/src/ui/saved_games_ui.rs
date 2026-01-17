@@ -4,9 +4,10 @@ use bevy::prelude::*;
 
 use super::{UiMarker, HOVERED_BUTTON, NORMAL_BUTTON, PRESSED_BUTTON};
 use crate::game::{ClientGame, GameMode};
+use crate::settings::GameSettings;
 use crate::storage::{SavedGameInfo, StorageManager};
 use crate::GameState;
-use protocol::{Difficulty, Fen};
+use protocol::Fen;
 
 /// 保存棋局页面标记
 #[derive(Component)]
@@ -364,6 +365,7 @@ pub fn handle_saved_games_buttons(
     mut game_state: ResMut<NextState<GameState>>,
     mut game: ResMut<ClientGame>,
     mut saved_games: ResMut<SavedGamesList>,
+    settings: Res<GameSettings>,
 ) {
     for (interaction, mut color, action) in &mut interaction_query {
         let base_color = match action {
@@ -378,7 +380,7 @@ pub fn handle_saved_games_buttons(
 
                 match action {
                     SavedGameAction::Load(game_id) => {
-                        if let Err(e) = load_game(&game_id, &mut game) {
+                        if let Err(e) = load_game(&game_id, &mut game, &settings) {
                             saved_games.error_message = Some(format!("加载失败: {}", e));
                         } else {
                             game_state.set(GameState::Playing);
@@ -414,25 +416,29 @@ pub fn handle_saved_games_buttons(
 }
 
 /// 加载棋局
-fn load_game(game_id: &str, game: &mut ClientGame) -> anyhow::Result<()> {
+fn load_game(game_id: &str, game: &mut ClientGame, settings: &GameSettings) -> anyhow::Result<()> {
     let storage = StorageManager::new()?;
     let record = storage.load_game(game_id)?;
 
-    // 解析难度
-    let difficulty = record
-        .metadata
-        .ai_difficulty
+    // 使用当前设置中的难度（支持自定义难度）
+    let difficulty = settings.default_difficulty.clone();
+
+    // 解析玩家执子方
+    let player_side = record
+        .save_info
         .as_ref()
-        .map(|d| match d.as_str() {
-            "Easy" | "简单" => Difficulty::Easy,
-            "Hard" | "困难" => Difficulty::Hard,
-            _ => Difficulty::Medium,
+        .map(|s| match s.player_side.as_str() {
+            "black" => protocol::Side::Black,
+            _ => protocol::Side::Red,
         })
-        .unwrap_or(Difficulty::Medium);
+        .unwrap_or(protocol::Side::Red);
 
     // 重建游戏状态
     let mut board_state = Fen::parse(&record.initial_fen)
         .map_err(|e| anyhow::anyhow!("无效的 FEN 字符串: {:?}", e))?;
+
+    // 保存初始 FEN
+    let initial_fen = record.initial_fen.clone();
 
     // 重放所有走法
     for mv in &record.moves {
@@ -442,11 +448,12 @@ fn load_game(game_id: &str, game: &mut ClientGame) -> anyhow::Result<()> {
         }
     }
 
-    // 初始化游戏
-    game.start_game(
+    // 初始化游戏（使用保存的玩家执子方）
+    game.start_game_with_fen(
         board_state.clone(),
-        protocol::Side::Red,
+        player_side,
         GameMode::LocalPvE { difficulty },
+        initial_fen,
     );
 
     // 恢复走法历史（使用 filter_map 一次性构建）
@@ -470,7 +477,7 @@ fn load_game(game_id: &str, game: &mut ClientGame) -> anyhow::Result<()> {
         game.black_time_ms = save_info.black_time_remaining_ms;
     }
 
-    tracing::info!("棋局已加载: {}", game_id);
+    tracing::info!("棋局已加载: {}, 玩家执{:?}方", game_id, player_side);
     Ok(())
 }
 

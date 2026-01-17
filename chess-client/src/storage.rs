@@ -35,6 +35,7 @@ impl StorageManager {
         black_player: &str,
         game_record: &mut GameRecord,
         game_state: &BoardState,
+        player_side: Side,
         red_time_ms: u64,
         black_time_ms: u64,
     ) -> Result<String> {
@@ -49,6 +50,10 @@ impl StorageManager {
             game_state: match game_state.current_turn {
                 Side::Red => "red_turn".to_string(),
                 Side::Black => "black_turn".to_string(),
+            },
+            player_side: match player_side {
+                Side::Red => "red".to_string(),
+                Side::Black => "black".to_string(),
             },
             red_time_remaining_ms: red_time_ms,
             black_time_remaining_ms: black_time_ms,

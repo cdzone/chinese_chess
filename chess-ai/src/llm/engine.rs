@@ -6,7 +6,7 @@
 //! - 对局复盘分析
 
 use anyhow::{Result, bail};
-use protocol::{BoardState, Move};
+use protocol::{Board, BoardState, Move};
 
 #[cfg(feature = "llm")]
 use tracing::{info, warn, debug};
@@ -160,6 +160,7 @@ impl LlmEngine {
     pub async fn analyze_game(
         &self,
         state: &BoardState,
+        initial_board: &Board,
         result: &str,
         red_player: &str,
         black_player: &str,
@@ -167,6 +168,7 @@ impl LlmEngine {
         let system = PromptTemplate::analysis_system_prompt();
         let prompt = PromptTemplate::game_analysis_prompt(
             state,
+            initial_board,
             &self.move_history,
             result,
             red_player,
@@ -210,6 +212,7 @@ impl LlmEngine {
     pub async fn analyze_game(
         &self,
         _state: &BoardState,
+        _initial_board: &Board,
         _result: &str,
         _red_player: &str,
         _black_player: &str,

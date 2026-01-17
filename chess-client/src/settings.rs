@@ -354,6 +354,12 @@ pub struct GameSettings {
     pub ai_timeout_secs: u32,
     /// 默认 AI 难度
     pub default_difficulty: Difficulty,
+    /// 自定义 AI 搜索深度 (1-10)
+    #[serde(default = "default_custom_ai_depth")]
+    pub custom_ai_depth: u8,
+    /// 自定义 AI 思考时间（毫秒）
+    #[serde(default = "default_custom_ai_time")]
+    pub custom_ai_time_ms: u64,
     /// 棋子动画速度（0.5-2.0）
     pub animation_speed: f32,
     /// 走子提示
@@ -401,6 +407,16 @@ pub struct GameSettings {
     pub show_fps: bool,
 }
 
+/// 自定义 AI 深度默认值
+fn default_custom_ai_depth() -> u8 {
+    4
+}
+
+/// 自定义 AI 思考时间默认值（毫秒）
+fn default_custom_ai_time() -> u64 {
+    3000
+}
+
 impl Default for GameSettings {
     fn default() -> Self {
         Self {
@@ -408,6 +424,8 @@ impl Default for GameSettings {
             time_limit: TimeLimit::default(),
             ai_timeout_secs: 10,
             default_difficulty: Difficulty::Medium,
+            custom_ai_depth: default_custom_ai_depth(),
+            custom_ai_time_ms: default_custom_ai_time(),
             animation_speed: 1.0,
             show_move_hints: true,
             board_flip: BoardFlip::default(),

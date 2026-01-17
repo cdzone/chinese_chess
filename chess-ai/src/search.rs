@@ -50,6 +50,13 @@ impl AiConfig {
                 use_opening_book: true,
                 tt_size_mb: 64,
             },
+            Difficulty::Custom { depth, time_limit_ms } => Self {
+                difficulty,
+                max_depth: depth,
+                time_limit_ms,
+                use_opening_book: depth >= 5,
+                tt_size_mb: if depth >= 6 { 64 } else if depth >= 4 { 32 } else { 16 },
+            },
         }
     }
 }
@@ -358,12 +365,34 @@ impl AiEngine {
         alpha
     }
 
-    /// 静态搜索（只搜索吃子走法）
+    /// 静态搜索（只搜索吃子走法和将军应对）
     fn quiescence(&mut self, state: &BoardState, mut alpha: i32, beta: i32, depth: u8) -> i32 {
         self.nodes_searched += 1;
 
+        // 检查是否被将军
+        let in_check = MoveGenerator::is_in_check(&state.board, state.current_turn);
+
+        // 生成合法走法
+        let moves = MoveGenerator::generate_legal(state);
+
+        // 无子可动：将死或困毙
+        if moves.is_empty() {
+            if in_check {
+                // 被将死，返回极低分（比正常将死分稍高，因为是静态搜索）
+                return -9900;
+            } else {
+                // 困毙，和棋
+                return 0;
+            }
+        }
+
         // 静态评估
-        let stand_pat = self.evaluate(state);
+        let mut stand_pat = self.evaluate(state);
+
+        // 被将军时给予惩罚，必须搜索所有走法
+        if in_check {
+            stand_pat -= 150; // 被将军惩罚
+        }
 
         if depth == 0 {
             return stand_pat;
@@ -376,11 +405,14 @@ impl AiEngine {
             alpha = stand_pat;
         }
 
-        // 只搜索吃子走法（通过检查目标位置是否有棋子来判断）
-        let moves = MoveGenerator::generate_legal(state);
-        let captures: Vec<_> = moves.into_iter().filter(|m| state.board.get(m.to).is_some()).collect();
+        // 如果被将军，搜索所有走法；否则只搜索吃子走法
+        let search_moves: Vec<_> = if in_check {
+            moves
+        } else {
+            moves.into_iter().filter(|m| state.board.get(m.to).is_some()).collect()
+        };
 
-        for mv in captures {
+        for mv in search_moves {
             let mut new_state = state.clone();
             new_state.board.move_piece(mv.from, mv.to);
             new_state.switch_turn();

@@ -871,8 +871,15 @@ impl MessageHandler {
                     protocol::Difficulty::Easy => "Easy",
                     protocol::Difficulty::Medium => "Medium",
                     protocol::Difficulty::Hard => "Hard",
+                    protocol::Difficulty::Custom { depth, time_limit_ms } => {
+                        // 保存自定义难度信息
+                        record.set_ai_difficulty(&format!("Custom(depth={},time={}ms)", depth, time_limit_ms));
+                        "Custom"
+                    }
                 };
-                record.set_ai_difficulty(difficulty_str);
+                if !matches!(difficulty, protocol::Difficulty::Custom { .. }) {
+                    record.set_ai_difficulty(difficulty_str);
+                }
             }
             
             // 保存到文件

@@ -531,8 +531,12 @@ fn save_current_game(game: &ClientGame, settings: &crate::settings::GameSettings
         _ => "对手".to_string(),
     };
 
-    // 创建棋谱记录
-    let mut record = GameRecord::new(red_player.clone(), black_player.clone());
+    // 创建棋谱记录（使用初始 FEN）
+    let mut record = if let Some(ref fen) = game.initial_fen {
+        GameRecord::from_fen(red_player.clone(), black_player.clone(), fen.clone())
+    } else {
+        GameRecord::new(red_player.clone(), black_player.clone())
+    };
 
     // 设置 AI 难度
     if let Some(difficulty) = game.game_mode.as_ref().and_then(|m| m.difficulty()) {
@@ -549,6 +553,9 @@ fn save_current_game(game: &ClientGame, settings: &crate::settings::GameSettings
         record.set_result(result.clone());
     }
 
+    // 获取玩家执子方
+    let player_side = game.player_side.unwrap_or(protocol::Side::Red);
+
     // 保存棋局
     match StorageManager::new() {
         Ok(storage) => {
@@ -557,6 +564,7 @@ fn save_current_game(game: &ClientGame, settings: &crate::settings::GameSettings
                 &black_player,
                 &mut record,
                 board_state,
+                player_side,
                 game.red_time_ms,
                 game.black_time_ms,
             ) {
@@ -1038,6 +1046,12 @@ fn start_ai_analysis(
         .map(|r| protocol::Move::new(r.from, r.to))
         .collect();
 
+    // 获取初始棋盘（从 FEN 解析或使用标准初始布局）
+    let initial_board = game.initial_fen.as_ref()
+        .and_then(|fen| protocol::Fen::parse(fen).ok())
+        .map(|state| state.board)
+        .unwrap_or_else(protocol::Board::initial);
+
     // 确定玩家名称
     let red_player = settings.nickname.clone();
     let black_player = match &game.game_mode {
@@ -1113,8 +1127,8 @@ fn start_ai_analysis(
                 engine.add_move(*mv);
             }
 
-            // 执行分析
-            match engine.analyze_game(&state, &result, &red_player, &black_player).await {
+            // 执行分析（传入初始棋盘以正确生成走法记号）
+            match engine.analyze_game(&state, &initial_board, &result, &red_player, &black_player).await {
                 Ok(analysis) => {
                     tracing::info!("AI analysis completed successfully");
                     Ok(analysis)

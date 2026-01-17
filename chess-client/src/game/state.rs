@@ -65,6 +65,8 @@ impl GameMode {
 pub struct ClientGame {
     /// 当前游戏状态
     pub game_state: Option<BoardState>,
+    /// 初始局面 FEN（用于保存棋局）
+    pub initial_fen: Option<String>,
     /// 玩家所属阵营
     pub player_side: Option<Side>,
     /// 游戏模式
@@ -108,6 +110,24 @@ impl ClientGame {
     /// 初始化新游戏
     pub fn start_game(&mut self, state: BoardState, side: Side, mode: GameMode) {
         self.game_state = Some(state.clone());
+        self.initial_fen = Some(protocol::INITIAL_FEN.to_string());
+        self.player_side = Some(side);
+        self.game_mode = Some(mode);
+        self.selected_piece = None;
+        self.valid_moves.clear();
+        self.last_move = None;
+        self.move_history.clear();
+        self.state_history.clear();
+        self.state_history.push(state); // 保存初始状态
+        self.is_paused = false;
+        self.waiting_undo_response = false;
+        self.game_result = None;
+    }
+
+    /// 初始化新游戏（带自定义 FEN）
+    pub fn start_game_with_fen(&mut self, state: BoardState, side: Side, mode: GameMode, fen: String) {
+        self.game_state = Some(state.clone());
+        self.initial_fen = Some(fen);
         self.player_side = Some(side);
         self.game_mode = Some(mode);
         self.selected_piece = None;

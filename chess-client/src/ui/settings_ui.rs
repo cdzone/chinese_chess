@@ -70,6 +70,10 @@ pub enum SettingsAction {
     AiTimeoutIncrease,
     DifficultyPrev,
     DifficultyNext,
+    CustomAiDepthDecrease,
+    CustomAiDepthIncrease,
+    CustomAiTimeDecrease,
+    CustomAiTimeIncrease,
     AnimationSpeedDecrease,
     AnimationSpeedIncrease,
     ToggleMoveHints,
@@ -279,10 +283,33 @@ fn spawn_game_settings(
             protocol::Difficulty::Easy => "简单",
             protocol::Difficulty::Medium => "中等",
             protocol::Difficulty::Hard => "困难",
+            protocol::Difficulty::Custom { .. } => "自定义",
         },
         "difficulty",
         SettingsAction::DifficultyPrev,
         SettingsAction::DifficultyNext,
+    );
+
+    // 自定义 AI 搜索深度
+    spawn_setting_row(
+        parent,
+        asset_server,
+        "自定义 AI 深度",
+        &format!("{}", settings.custom_ai_depth),
+        "custom_ai_depth",
+        SettingsAction::CustomAiDepthDecrease,
+        SettingsAction::CustomAiDepthIncrease,
+    );
+
+    // 自定义 AI 思考时间
+    spawn_setting_row(
+        parent,
+        asset_server,
+        "自定义 AI 时间",
+        &format!("{:.1}秒", settings.custom_ai_time_ms as f32 / 1000.0),
+        "custom_ai_time",
+        SettingsAction::CustomAiTimeDecrease,
+        SettingsAction::CustomAiTimeIncrease,
     );
 
     // 棋子动画速度
@@ -889,17 +916,73 @@ fn handle_settings_action(
         }
         SettingsAction::DifficultyPrev => {
             temp_settings.0.default_difficulty = match temp_settings.0.default_difficulty {
-                protocol::Difficulty::Easy => protocol::Difficulty::Hard,
+                protocol::Difficulty::Easy => protocol::Difficulty::Custom {
+                    depth: temp_settings.0.custom_ai_depth,
+                    time_limit_ms: temp_settings.0.custom_ai_time_ms,
+                },
                 protocol::Difficulty::Medium => protocol::Difficulty::Easy,
                 protocol::Difficulty::Hard => protocol::Difficulty::Medium,
+                protocol::Difficulty::Custom { .. } => protocol::Difficulty::Hard,
             };
         }
         SettingsAction::DifficultyNext => {
             temp_settings.0.default_difficulty = match temp_settings.0.default_difficulty {
                 protocol::Difficulty::Easy => protocol::Difficulty::Medium,
                 protocol::Difficulty::Medium => protocol::Difficulty::Hard,
-                protocol::Difficulty::Hard => protocol::Difficulty::Easy,
+                protocol::Difficulty::Hard => protocol::Difficulty::Custom {
+                    depth: temp_settings.0.custom_ai_depth,
+                    time_limit_ms: temp_settings.0.custom_ai_time_ms,
+                },
+                protocol::Difficulty::Custom { .. } => protocol::Difficulty::Easy,
             };
+        }
+        SettingsAction::CustomAiDepthDecrease => {
+            if temp_settings.0.custom_ai_depth > 1 {
+                temp_settings.0.custom_ai_depth -= 1;
+                // 同步更新自定义难度
+                if let protocol::Difficulty::Custom { time_limit_ms, .. } = temp_settings.0.default_difficulty {
+                    temp_settings.0.default_difficulty = protocol::Difficulty::Custom {
+                        depth: temp_settings.0.custom_ai_depth,
+                        time_limit_ms,
+                    };
+                }
+            }
+        }
+        SettingsAction::CustomAiDepthIncrease => {
+            if temp_settings.0.custom_ai_depth < 10 {
+                temp_settings.0.custom_ai_depth += 1;
+                // 同步更新自定义难度
+                if let protocol::Difficulty::Custom { time_limit_ms, .. } = temp_settings.0.default_difficulty {
+                    temp_settings.0.default_difficulty = protocol::Difficulty::Custom {
+                        depth: temp_settings.0.custom_ai_depth,
+                        time_limit_ms,
+                    };
+                }
+            }
+        }
+        SettingsAction::CustomAiTimeDecrease => {
+            if temp_settings.0.custom_ai_time_ms > 500 {
+                temp_settings.0.custom_ai_time_ms -= 500;
+                // 同步更新自定义难度
+                if let protocol::Difficulty::Custom { depth, .. } = temp_settings.0.default_difficulty {
+                    temp_settings.0.default_difficulty = protocol::Difficulty::Custom {
+                        depth,
+                        time_limit_ms: temp_settings.0.custom_ai_time_ms,
+                    };
+                }
+            }
+        }
+        SettingsAction::CustomAiTimeIncrease => {
+            if temp_settings.0.custom_ai_time_ms < 30000 {
+                temp_settings.0.custom_ai_time_ms += 500;
+                // 同步更新自定义难度
+                if let protocol::Difficulty::Custom { depth, .. } = temp_settings.0.default_difficulty {
+                    temp_settings.0.default_difficulty = protocol::Difficulty::Custom {
+                        depth,
+                        time_limit_ms: temp_settings.0.custom_ai_time_ms,
+                    };
+                }
+            }
         }
         SettingsAction::AnimationSpeedDecrease => {
             if temp_settings.0.animation_speed > 0.5 {
@@ -1012,7 +1095,10 @@ pub fn update_settings_display(
                 protocol::Difficulty::Easy => "简单".to_string(),
                 protocol::Difficulty::Medium => "中等".to_string(),
                 protocol::Difficulty::Hard => "困难".to_string(),
+                protocol::Difficulty::Custom { .. } => "自定义".to_string(),
             },
+            "custom_ai_depth" => format!("{}", temp_settings.0.custom_ai_depth),
+            "custom_ai_time" => format!("{:.1}秒", temp_settings.0.custom_ai_time_ms as f32 / 1000.0),
             "animation_speed" => format!("{:.1}x", temp_settings.0.animation_speed),
             "show_move_hints" => {
                 if temp_settings.0.show_move_hints {

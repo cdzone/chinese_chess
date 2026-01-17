@@ -1,7 +1,7 @@
 //! 棋盘编辑器主 UI
 
 use bevy::prelude::*;
-use protocol::{BoardState, Side, Difficulty};
+use protocol::{BoardState, Side, Difficulty, Fen};
 
 use super::{
     BoardEditorState, OpponentType,
@@ -457,8 +457,7 @@ pub fn handle_editor_buttons(
                         game_state.set(GameState::Playing);
                     }
                     EditorAction::SaveLayout => {
-                        // TODO: 实现保存功能
-                        tracing::info!("保存布局功能待实现");
+                        save_editor_layout(&editor_state);
                     }
                     EditorAction::ConfirmWarning => {
                         editor_state.show_warning_dialog = false;
@@ -483,6 +482,9 @@ pub fn handle_editor_buttons(
 /// 从编辑器开始对局
 fn start_game_from_editor(editor_state: &BoardEditorState, game: &mut ClientGame) {
     let board_state = BoardState::from_board(editor_state.board.clone(), editor_state.first_turn);
+    
+    // 保存初始 FEN 以便后续保存棋局
+    let initial_fen = Fen::to_string(&board_state);
 
     let game_mode = match editor_state.opponent_type {
         OpponentType::AI => GameMode::LocalPvE {
@@ -492,7 +494,53 @@ fn start_game_from_editor(editor_state: &BoardEditorState, game: &mut ClientGame
     };
 
     tracing::info!("从编辑器开始对局: {:?}", game_mode);
-    game.start_game(board_state, editor_state.player_side, game_mode);
+    game.start_game_with_fen(board_state, editor_state.player_side, game_mode, initial_fen);
+}
+
+/// 保存编辑器布局
+fn save_editor_layout(editor_state: &BoardEditorState) {
+    use crate::storage::StorageManager;
+    use protocol::{BoardState, GameRecord};
+
+    let board_state = BoardState::from_board(editor_state.board.clone(), editor_state.first_turn);
+    let fen = Fen::to_string(&board_state);
+
+    // 创建一个只包含初始布局的棋谱记录
+    let mut record = GameRecord::from_fen(
+        "编辑器".to_string(),
+        "布局".to_string(),
+        fen,
+    );
+
+    // 根据对手类型设置 AI 难度
+    if editor_state.opponent_type == OpponentType::AI {
+        record.set_ai_difficulty(&format!("{:?}", editor_state.ai_difficulty));
+    }
+
+    // 保存
+    match StorageManager::new() {
+        Ok(storage) => {
+            match storage.save_game(
+                "编辑器",
+                "布局",
+                &mut record,
+                &board_state,
+                editor_state.player_side,
+                600_000, // 10分钟默认时间
+                600_000,
+            ) {
+                Ok(filename) => {
+                    tracing::info!("布局已保存: {}", filename);
+                }
+                Err(e) => {
+                    tracing::error!("保存布局失败: {}", e);
+                }
+            }
+        }
+        Err(e) => {
+            tracing::error!("初始化存储失败: {}", e);
+        }
+    }
 }
 
 /// 处理先手选择

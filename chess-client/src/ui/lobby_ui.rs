@@ -271,6 +271,7 @@ fn spawn_room_entry(parent: &mut ChildSpawnerCommands, asset_server: &AssetServe
             protocol::Difficulty::Easy => "PvE 简单",
             protocol::Difficulty::Medium => "PvE 中等",
             protocol::Difficulty::Hard => "PvE 困难",
+            protocol::Difficulty::Custom { .. } => "PvE 自定义",
         },
     };
 

@@ -46,6 +46,9 @@ struct GenerateRequest {
     system: Option<String>,
     stream: bool,
     options: GenerateOptions,
+    /// 禁用 thinking 模式（qwen3 等模型支持）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    think: Option<bool>,
 }
 
 #[cfg(feature = "llm")]
@@ -153,6 +156,9 @@ impl OllamaClient {
     pub async fn generate(&self, prompt: &str, system: Option<&str>) -> Result<String> {
         let url = format!("{}/api/generate", self.config.base_url);
         
+        // 检测是否是 qwen3 模型，如果是则禁用 thinking 模式
+        let is_qwen3 = self.config.model.to_lowercase().contains("qwen3");
+        
         let request = GenerateRequest {
             model: self.config.model.clone(),
             prompt: prompt.to_string(),
@@ -162,10 +168,12 @@ impl OllamaClient {
                 temperature: self.config.temperature,
                 num_predict: self.config.max_tokens,
             },
+            // 对于 qwen3 等支持 thinking 的模型，显式禁用以获得完整的 JSON 输出
+            think: if is_qwen3 { Some(false) } else { None },
         };
 
-        debug!("Sending request to Ollama: model={}, prompt_len={}", 
-            self.config.model, prompt.len());
+        debug!("Sending request to Ollama: model={}, prompt_len={}, think={:?}", 
+            self.config.model, prompt.len(), request.think);
 
         let response = self.client
             .post(&url)

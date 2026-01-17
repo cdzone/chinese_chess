@@ -107,12 +107,16 @@ pub fn validate_board(board: &Board, first_turn: Side) -> BoardValidation {
         }
     }
 
-    // 检查将帅存在
+    // 检查将帅存在且唯一
     if red_king == 0 {
         result.errors.push("红方必须有帥".to_string());
+    } else if red_king > 1 {
+        result.errors.push("红方帥只能有 1 个".to_string());
     }
     if black_king == 0 {
         result.errors.push("黑方必须有將".to_string());
+    } else if black_king > 1 {
+        result.errors.push("黑方將只能有 1 个".to_string());
     }
 
     // 检查将帅面对面
