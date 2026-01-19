@@ -52,6 +52,7 @@ impl KillerMoves {
     
     /// 存储 killer 走法
     fn store(&mut self, ply: usize, mv: Move) {
+        debug_assert!(ply < MAX_PLY, "ply {} exceeds MAX_PLY {}", ply, MAX_PLY);
         if ply >= MAX_PLY {
             return;
         }
@@ -64,6 +65,7 @@ impl KillerMoves {
     
     /// 检查是否是 killer 走法
     fn is_killer(&self, ply: usize, mv: &Move) -> bool {
+        debug_assert!(ply < MAX_PLY, "ply {} exceeds MAX_PLY {}", ply, MAX_PLY);
         if ply >= MAX_PLY {
             return false;
         }
