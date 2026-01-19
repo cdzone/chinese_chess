@@ -1,10 +1,10 @@
 //! 搜索引擎
 //!
-//! 实现 Minimax + Alpha-Beta 剪枝 + 迭代加深 + 置换表
+//! 实现 Minimax + Alpha-Beta 剪枝 + 迭代加深 + 置换表 + 走法排序优化
 
 use std::time::{Duration, Instant};
 
-use protocol::{BoardState, Move, MoveGenerator, Side};
+use protocol::{Board, BoardState, Move, MoveGenerator, Side};
 use rand::seq::SliceRandom;
 use serde::{Deserialize, Serialize};
 
@@ -14,6 +14,161 @@ use crate::zobrist::ZobristTable;
 
 // 重导出 Difficulty 以便外部使用
 pub use protocol::Difficulty;
+
+// ============================================================================
+// 走法排序优化相关常量和数据结构
+// ============================================================================
+
+/// 最大搜索深度（用于 Killer 表大小）
+const MAX_PLY: usize = 64;
+
+/// MVV-LVA 分数：用小子吃大子优先
+/// 返回值越大表示优先级越高
+fn mvv_lva_score(mv: &Move, board: &Board) -> i32 {
+    let victim_value = board.get(mv.to)
+        .map(|p| p.piece_type.value())
+        .unwrap_or(0);
+    let attacker_value = board.get(mv.from)
+        .map(|p| p.piece_type.value())
+        .unwrap_or(0);
+    
+    // victim * 10 - attacker，确保吃大子总是优先
+    victim_value * 10 - attacker_value
+}
+
+/// Killer 走法表：每层保存 2 个导致 beta 截断的非吃子走法
+#[derive(Clone)]
+struct KillerMoves {
+    /// killers[ply][0..2] - 每层最多 2 个 killer
+    killers: [[Option<Move>; 2]; MAX_PLY],
+}
+
+impl KillerMoves {
+    fn new() -> Self {
+        Self {
+            killers: [[None; 2]; MAX_PLY],
+        }
+    }
+    
+    /// 存储 killer 走法
+    fn store(&mut self, ply: usize, mv: Move) {
+        if ply >= MAX_PLY {
+            return;
+        }
+        // 避免重复存储
+        if self.killers[ply][0] != Some(mv) {
+            self.killers[ply][1] = self.killers[ply][0];
+            self.killers[ply][0] = Some(mv);
+        }
+    }
+    
+    /// 检查是否是 killer 走法
+    fn is_killer(&self, ply: usize, mv: &Move) -> bool {
+        if ply >= MAX_PLY {
+            return false;
+        }
+        self.killers[ply][0].as_ref() == Some(mv) 
+            || self.killers[ply][1].as_ref() == Some(mv)
+    }
+    
+    /// 清空 killer 表（每次新的根节点搜索时调用）
+    fn clear(&mut self) {
+        for killers in self.killers.iter_mut() {
+            *killers = [None, None];
+        }
+    }
+}
+
+/// 历史启发表：记录走法导致截断的累计分数
+#[derive(Clone)]
+struct HistoryTable {
+    /// history[side][from_square][to_square]
+    table: [[[i32; 90]; 90]; 2],
+}
+
+impl HistoryTable {
+    fn new() -> Self {
+        Self {
+            table: [[[0; 90]; 90]; 2],
+        }
+    }
+    
+    /// 更新历史分数（截断时调用）
+    fn update(&mut self, side: Side, mv: &Move, depth: u8) {
+        let from_idx = mv.from.y as usize * 9 + mv.from.x as usize;
+        let to_idx = mv.to.y as usize * 9 + mv.to.x as usize;
+        let side_idx = side as usize;
+        
+        // 深度越大，加分越多（depth²）
+        let bonus = (depth as i32) * (depth as i32);
+        // 防止溢出
+        self.table[side_idx][from_idx][to_idx] = 
+            self.table[side_idx][from_idx][to_idx].saturating_add(bonus);
+    }
+    
+    /// 获取历史分数
+    fn get(&self, side: Side, mv: &Move) -> i32 {
+        let from_idx = mv.from.y as usize * 9 + mv.from.x as usize;
+        let to_idx = mv.to.y as usize * 9 + mv.to.x as usize;
+        self.table[side as usize][from_idx][to_idx]
+    }
+    
+    /// 衰减历史分数（每次新的根节点搜索时调用）
+    fn age(&mut self) {
+        for side in self.table.iter_mut() {
+            for from in side.iter_mut() {
+                for score in from.iter_mut() {
+                    *score /= 2;
+                }
+            }
+        }
+    }
+}
+
+/// 走法排序上下文
+struct MoveOrderContext<'a> {
+    tt_move: Option<Move>,
+    killers: &'a KillerMoves,
+    history: &'a HistoryTable,
+    ply: usize,
+}
+
+/// 对走法进行排序
+fn order_moves(
+    moves: &mut Vec<Move>,
+    board: &Board,
+    current_turn: Side,
+    ctx: &MoveOrderContext,
+) {
+    // 注意：sort_by_cached_key 是升序排序，值越小越靠前
+    moves.sort_by_cached_key(|mv| {
+        // TT 最佳走法最优先（最小值）
+        if ctx.tt_move.as_ref() == Some(mv) {
+            return i32::MIN;
+        }
+        
+        // 吃子走法按 MVV-LVA 排序（分数越高应越靠前，所以取负）
+        if board.get(mv.to).is_some() {
+            return i32::MIN / 2 - mvv_lva_score(mv, board);
+        }
+        
+        // Killer 走法次之
+        if ctx.killers.is_killer(ctx.ply, mv) {
+            return 0;
+        }
+        
+        // 其他走法按历史启发排序（分数越高越靠前，取负）
+        -ctx.history.get(current_turn, mv)
+    });
+}
+
+/// 对 quiescence 搜索中的吃子走法进行 MVV-LVA 排序
+fn order_captures(moves: &mut Vec<Move>, board: &Board) {
+    moves.sort_by_cached_key(|mv| {
+        // 分数越高越靠前，取负
+        -mvv_lva_score(mv, board)
+    });
+}
 
 /// AI 配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -77,6 +232,10 @@ pub struct AiEngine {
     tt: TranspositionTable,
     /// 搜索路径哈希栈（用于检测重复局面）
     path_hashes: Vec<u64>,
+    /// Killer 走法表
+    killer_moves: KillerMoves,
+    /// 历史启发表
+    history_table: HistoryTable,
 }
 
 impl AiEngine {
@@ -89,6 +248,8 @@ impl AiEngine {
             zobrist: ZobristTable::new(),
             tt: TranspositionTable::new(tt_size),
             path_hashes: Vec::with_capacity(64),
+            killer_moves: KillerMoves::new(),
+            history_table: HistoryTable::new(),
         }
     }
 
@@ -111,6 +272,11 @@ impl AiEngine {
         self.nodes_searched = 0;
         self.tt.new_search();
         self.path_hashes.clear();
+        
+        // 每次新搜索时清空 killer 表并衰减历史表
+        self.killer_moves.clear();
+        self.history_table.age();
+        
         let deadline = Instant::now() + Duration::from_millis(self.config.time_limit_ms);
 
         // 继承历史局面的哈希（检测跨回合重复）
@@ -120,7 +286,7 @@ impl AiEngine {
         }
 
         // 生成所有合法走法
-        let moves = MoveGenerator::generate_legal(state);
+        let mut moves = MoveGenerator::generate_legal(state);
         if moves.is_empty() {
             return None;
         }
@@ -148,20 +314,25 @@ impl AiEngine {
             let mut current_best_move = moves[0];
             let mut current_best_score = i32::MIN;
 
-            // 尝试从置换表获取最佳走法，优先搜索
-            let mut ordered_moves = moves.clone();
-            if let Some(entry) = self.tt.probe(hash) {
-                if let Some((fx, fy, tx, ty)) = entry.decode_move() {
-                    // 将置换表中的最佳走法移到最前面
-                    if let Some(pos) = ordered_moves.iter().position(|m| {
+            // 获取置换表最佳走法
+            let tt_move = self.tt.probe(hash).and_then(|entry| {
+                entry.decode_move().and_then(|(fx, fy, tx, ty)| {
+                    moves.iter().find(|m| {
                         m.from.x == fx && m.from.y == fy && m.to.x == tx && m.to.y == ty
-                    }) {
-                        ordered_moves.swap(0, pos);
-                    }
-                }
-            }
+                    }).cloned()
+                })
+            });
 
-            for mv in &ordered_moves {
+            // 对根节点走法排序
+            let ctx = MoveOrderContext {
+                tt_move,
+                killers: &self.killer_moves,
+                history: &self.history_table,
+                ply: 0,
+            };
+            order_moves(&mut moves, &state.board, state.current_turn, &ctx);
+
+            for mv in &moves {
                 if Instant::now() >= deadline {
                     break;
                 }
@@ -178,11 +349,12 @@ impl AiEngine {
                 // 入栈
                 self.path_hashes.push(new_hash);
 
-                // Alpha-Beta 搜索
+                // Alpha-Beta 搜索（ply=1 因为从根节点进入）
                 let score = -self.alpha_beta(
                     &new_state,
                     new_hash,
                     depth,
+                    1,  // ply
                     i32::MIN + 1,
                     i32::MAX - 1,
                     &deadline,
@@ -259,6 +431,7 @@ impl AiEngine {
         state: &BoardState,
         hash: u64,
         depth: u8,
+        ply: usize,
         mut alpha: i32,
         beta: i32,
         deadline: &Instant,
@@ -278,7 +451,8 @@ impl AiEngine {
         }
 
         // 查询置换表
-        if let Some(entry) = self.tt.probe(hash) {
+        let tt_entry = self.tt.probe(hash);
+        if let Some(ref entry) = tt_entry {
             if entry.depth >= depth {
                 match entry.entry_type {
                     EntryType::Exact => return entry.score as i32,
@@ -302,18 +476,36 @@ impl AiEngine {
         }
 
         // 生成所有合法走法
-        let moves = MoveGenerator::generate_legal(state);
+        let mut moves = MoveGenerator::generate_legal(state);
 
         // 无子可动
         if moves.is_empty() {
             if MoveGenerator::is_in_check(&state.board, state.current_turn) {
-                // 被将死
-                return -10000 + (self.config.max_depth - depth) as i32;
+                // 被将死（ply 越大说明距离根越远，给较小惩罚让 AI 选择更快的将死）
+                return -10000 + ply as i32;
             } else {
                 // 困毙（和棋）
                 return 0;
             }
         }
+
+        // 获取置换表最佳走法
+        let tt_move = tt_entry.and_then(|entry| {
+            entry.decode_move().and_then(|(fx, fy, tx, ty)| {
+                moves.iter().find(|m| {
+                    m.from.x == fx && m.from.y == fy && m.to.x == tx && m.to.y == ty
+                }).cloned()
+            })
+        });
+
+        // 走法排序
+        let ctx = MoveOrderContext {
+            tt_move,
+            killers: &self.killer_moves,
+            history: &self.history_table,
+            ply,
+        };
+        order_moves(&mut moves, &state.board, state.current_turn, &ctx);
 
         let mut best_move: Option<Move> = None;
         let mut entry_type = EntryType::UpperBound;
@@ -330,13 +522,21 @@ impl AiEngine {
             // 入栈
             self.path_hashes.push(new_hash);
             
-            let score = -self.alpha_beta(&new_state, new_hash, depth - 1, -beta, -alpha, deadline);
+            let score = -self.alpha_beta(&new_state, new_hash, depth - 1, ply + 1, -beta, -alpha, deadline);
             
             // 出栈
             self.path_hashes.pop();
 
             if score >= beta {
-                // Beta 剪枝
+                // Beta 剪枝 - 更新 killer 和历史表
+                let is_capture = state.board.get(mv.to).is_some();
+                if !is_capture {
+                    // 只存储非吃子走法为 killer
+                    self.killer_moves.store(ply, mv);
+                    // 更新历史启发表
+                    self.history_table.update(state.current_turn, &mv, depth);
+                }
+                
                 self.tt.store(
                     hash,
                     score,
@@ -366,7 +566,7 @@ impl AiEngine {
     }
 
     /// 静态搜索（只搜索吃子走法和将军应对）
-    fn quiescence(&mut self, state: &BoardState, mut alpha: i32, beta: i32, depth: u8) -> i32 {
+    fn quiescence(&mut self, state: &BoardState, mut alpha: i32, beta: i32, qs_depth: u8) -> i32 {
         self.nodes_searched += 1;
 
         // 检查是否被将军
@@ -394,7 +594,7 @@ impl AiEngine {
             stand_pat -= 150; // 被将军惩罚
         }
 
-        if depth == 0 {
+        if qs_depth == 0 {
             return stand_pat;
         }
 
@@ -406,18 +606,23 @@ impl AiEngine {
         }
 
         // 如果被将军，搜索所有走法；否则只搜索吃子走法
-        let search_moves: Vec<_> = if in_check {
+        let mut search_moves: Vec<_> = if in_check {
             moves
         } else {
             moves.into_iter().filter(|m| state.board.get(m.to).is_some()).collect()
         };
+
+        // 对吃子走法进行 MVV-LVA 排序（深度 > 0 时排序收益更大）
+        if qs_depth > 1 && !search_moves.is_empty() {
+            order_captures(&mut search_moves, &state.board);
+        }
 
         for mv in search_moves {
             let mut new_state = state.clone();
             new_state.board.move_piece(mv.from, mv.to);
             new_state.switch_turn();
 
-            let score = -self.quiescence(&new_state, -beta, -alpha, depth - 1);
+            let score = -self.quiescence(&new_state, -beta, -alpha, qs_depth - 1);
 
             if score >= beta {
                 return beta;
@@ -809,5 +1014,164 @@ mod tests {
         assert!(mv.is_some(), "AI 应该返回走法");
         
         println!("跨回合重复检测测试: AI 选择 {:?}", mv);
+    }
+
+    #[test]
+    fn test_mvv_lva_score() {
+        // 验证 MVV-LVA 分数计算正确性
+        use protocol::Position;
+        
+        // 创建测试棋盘：红炮(4,5) 可以吃黑车(4,9) 或黑兵(4,6)
+        let fen = "4r4/9/9/4p4/9/4C4/9/9/9/4K4 w 0 1";
+        let state = Fen::parse(fen).unwrap();
+        
+        // 吃车的走法
+        let capture_rook = Move {
+            from: Position::new_unchecked(4, 5),
+            to: Position::new_unchecked(4, 9),
+            captured: state.board.get(Position::new_unchecked(4, 9)),
+        };
+        
+        // 吃兵的走法
+        let capture_pawn = Move {
+            from: Position::new_unchecked(4, 5),
+            to: Position::new_unchecked(4, 6),
+            captured: state.board.get(Position::new_unchecked(4, 6)),
+        };
+        
+        let score_rook = mvv_lva_score(&capture_rook, &state.board);
+        let score_pawn = mvv_lva_score(&capture_pawn, &state.board);
+        
+        // 吃车分数应该高于吃兵
+        assert!(
+            score_rook > score_pawn,
+            "吃车分数应高于吃兵: {} vs {}",
+            score_rook, score_pawn
+        );
+        
+        println!("MVV-LVA: 吃车={}, 吃兵={}", score_rook, score_pawn);
+    }
+
+    #[test]
+    fn test_killer_moves() {
+        // 验证 Killer Move 存储和检索
+        use protocol::Position;
+        
+        let mut killers = KillerMoves::new();
+        
+        let mv1 = Move {
+            from: Position::new_unchecked(0, 0),
+            to: Position::new_unchecked(0, 1),
+            captured: None,
+        };
+        let mv2 = Move {
+            from: Position::new_unchecked(1, 0),
+            to: Position::new_unchecked(1, 1),
+            captured: None,
+        };
+        let mv3 = Move {
+            from: Position::new_unchecked(2, 0),
+            to: Position::new_unchecked(2, 1),
+            captured: None,
+        };
+        
+        // 存储第一个 killer
+        killers.store(5, mv1);
+        assert!(killers.is_killer(5, &mv1), "mv1 应该是 ply=5 的 killer");
+        assert!(!killers.is_killer(6, &mv1), "mv1 不应该是 ply=6 的 killer");
+        
+        // 存储第二个 killer
+        killers.store(5, mv2);
+        assert!(killers.is_killer(5, &mv1), "mv1 仍应该是 ply=5 的 killer");
+        assert!(killers.is_killer(5, &mv2), "mv2 应该是 ply=5 的 killer");
+        
+        // 存储第三个会挤掉第一个
+        killers.store(5, mv3);
+        assert!(!killers.is_killer(5, &mv1), "mv1 应该被挤掉");
+        assert!(killers.is_killer(5, &mv2), "mv2 仍应该是 killer");
+        assert!(killers.is_killer(5, &mv3), "mv3 应该是 killer");
+        
+        // 清空后应该没有 killer
+        killers.clear();
+        assert!(!killers.is_killer(5, &mv2), "清空后不应该有 killer");
+        assert!(!killers.is_killer(5, &mv3), "清空后不应该有 killer");
+    }
+
+    #[test]
+    fn test_history_table() {
+        // 验证历史启发表
+        use protocol::Position;
+        
+        let mut history = HistoryTable::new();
+        
+        let mv = Move {
+            from: Position::new_unchecked(4, 0),
+            to: Position::new_unchecked(4, 1),
+            captured: None,
+        };
+        
+        // 初始分数为 0
+        assert_eq!(history.get(Side::Red, &mv), 0);
+        
+        // 更新后分数增加（depth² = 9）
+        history.update(Side::Red, &mv, 3);
+        assert_eq!(history.get(Side::Red, &mv), 9);
+        
+        // 再次更新累加
+        history.update(Side::Red, &mv, 4);
+        assert_eq!(history.get(Side::Red, &mv), 9 + 16);
+        
+        // 衰减后减半
+        history.age();
+        assert_eq!(history.get(Side::Red, &mv), (9 + 16) / 2);
+        
+        // 不同方的历史独立
+        assert_eq!(history.get(Side::Black, &mv), 0);
+    }
+
+    #[test]
+    fn test_move_ordering() {
+        // 验证综合走法排序
+        
+        // 使用初始局面进行测试
+        let state = BoardState::initial();
+        
+        let mut moves = MoveGenerator::generate_legal(&state);
+        let original_len = moves.len();
+        
+        // 创建排序上下文
+        let killers = KillerMoves::new();
+        let history = HistoryTable::new();
+        
+        // 从生成的走法中选取第一个作为 TT 走法
+        let tt_move = moves.get(5).cloned();  // 选取列表中间的一个走法
+        
+        assert!(tt_move.is_some(), "应该有走法可供选择");
+        
+        let ctx = MoveOrderContext {
+            tt_move: tt_move.clone(),
+            killers: &killers,
+            history: &history,
+            ply: 0,
+        };
+        
+        order_moves(&mut moves, &state.board, state.current_turn, &ctx);
+        
+        // 排序后数量不变
+        assert_eq!(moves.len(), original_len);
+        
+        // TT 走法应该在第一位
+        if let Some(ref expected) = tt_move {
+            assert_eq!(
+                moves[0].from, expected.from,
+                "TT 走法应该排在第一位 (from)"
+            );
+            assert_eq!(
+                moves[0].to, expected.to,
+                "TT 走法应该排在第一位 (to)"
+            );
+        }
+        
+        println!("排序后的走法数量: {}", moves.len());
     }
 }
