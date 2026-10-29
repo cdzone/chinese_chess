@@ -1,671 +1,105 @@
-# AI 本地化方案
+# AI 本地化方案（现状说明）
 
 ## 文档信息
 
-- **文档版本**: v1.0
+- **文档版本**: v1.1（scrub）
 - **创建日期**: 2026-01-10
-- **状态**: 待讨论
-- **目标**: 将 PvE 模式的 AI 从服务端迁移到客户端本地运行
+- **修订日期**: 2026-10-29
+- **状态**: 核心已实施（本文档保留为设计对照，不再作「待讨论」提案）
+- **目标**: 将 PvE 的 Alpha-Beta AI 迁到客户端本地运行；在线 AI 作备选
 
 ---
 
-## 一、背景与问题
+## 一、背景（历史）
 
-### 1.1 当前架构
-
-当前 PvE 模式采用**服务端托管 AI** 的架构：
-
-```
-客户端                      服务端
-  |                          |
-  |---走棋-----------------→ |
-  |                          |-- AI 计算（阻塞 1-5 秒）
-  |                          |
-  |←--AI 走法--------------- |
-```
-
-**实现位置**：
-- `chess-server/src/server.rs:537-651` - AI 走棋逻辑
-- `chess-ai/` - AI 引擎库
-
-### 1.2 存在的问题
-
-| 问题 | 描述 | 影响 |
-|------|------|------|
-| **服务器负载高** | 每个 AI 对局消耗 CPU 1-5 秒/步 | 100 并发对局会严重影响性能 |
-| **延迟体验差** | 网络往返 + AI 计算时间 | 用户等待时间长 |
-| **成本高** | 服务器需要强 CPU | 运营成本增加 |
-| **离线不可用** | 必须连接服务器 | 单机对战无法实现 |
-| **并发问题** | 虽已使用 `block_in_place` | 但仍占用服务器资源 |
-
-### 1.3 为什么要本地化
-
-**优势分析**：
-
-✅ **性能提升**
-- 利用客户端 CPU，服务器压力降为 0
-- 没有网络延迟，AI 响应更快
-- 可根据客户端硬件调整难度
-
-✅ **成本降低**
-- 服务器只处理网络消息
-- 可使用廉价轻量级服务器
-- 客户端算力免费
-
-✅ **离线可用**
-- 单机模式完全不需要网络
-- 网络断开可继续游戏
-- 适合移动端弱网环境
-
-✅ **隐私保护**
-- 棋谱不需要上传服务器
-- 可选择是否联网
+早期 PvE 由服务端托管 AI（`chess-server` 内调用 `chess-ai`），存在算力占服务器、网络延迟、离线不可用等问题。本地化把搜索放到客户端，服务器只负责联机。
 
 ---
 
-## 二、技术方案
+## 二、已落地（以代码为准）
 
-### 2.1 架构设计
+### 2.1 模式与入口
 
-#### 混合模式架构（推荐）
+| 能力 | 位置 |
+|------|------|
+| `GameMode::LocalPvE { difficulty }` | `chess-client/src/game/state.rs` |
+| `ClientGame::start_local_pve` | 同上 |
+| 菜单「单机对战」难度入口 | `chess-client/src/ui/menu.rs` |
+| 本地悔棋 / 暂停 / 认输 | `chess-client/src/game/mod.rs`（`GameEvent`） |
+| 本地存档读写 | `chess-client/src/storage.rs`、`ui/saved_games_ui.rs` |
 
-```
-┌─────────────────────────────────────┐
-│           客户端                    │
-├─────────────────────────────────────┤
-│  游戏模式                           │
-│  ├── LocalPvE（本地 AI）⭐ 主要    │
-│  ├── OnlinePvE（在线 AI）备选      │
-│  └── OnlinePvP（在线对战）         │
-└─────────────────────────────────────┘
+`GameMode` 另含 `LocalPvP`、`OnlinePvE`、`OnlinePvP`；本说明只覆盖本地 AI 路径。
 
-LocalPvE 流程：
-客户端 UI → ClientGame → AI Engine → 返回走法 → 更新棋盘
-（完全本地，无网络）
+### 2.2 本地 AI 运行时
 
-OnlinePvE 流程：
-客户端 UI → 网络层 → 服务器 → AI Engine → 返回走法 → 客户端
-（保留现有逻辑）
-```
+| 能力 | 位置 |
+|------|------|
+| `LocalAiPlugin`（注册于 `GamePlugin`） | `chess-client/src/game/ai.rs`、`game/mod.rs` |
+| `AsyncComputeTaskPool` 后台搜索 | `ai.rs`：`trigger_ai_compute` / `poll_ai_result` |
+| `AiEngine::from_difficulty` + `search_with_history` | `chess-ai`（客户端依赖见 `chess-client/Cargo.toml`） |
+| 思考态 `AiThinkingState` + UI「AI 思考中...」 | `ai.rs`、`chess-client/src/ui/game_ui.rs` |
+| AI 超时保护（设置项 `ai_timeout_secs`） | `ai.rs` + `settings` |
 
-### 2.2 核心数据结构
+说明：提案草稿曾规划单独的 `local_ai.rs`；实现合并进 `game/ai.rs`，**无** `local_ai.rs`。
 
-```rust
-// chess-client/src/game/state.rs
-#[derive(Clone, Debug)]
-pub enum GameMode {
-    /// 本地单机 AI（推荐）
-    LocalPvE {
-        difficulty: Difficulty,
-    },
-    /// 在线 AI（保留）
-    OnlinePvE {
-        room_id: RoomId,
-    },
-    /// 在线对战
-    OnlinePvP {
-        room_id: RoomId,
-    },
-}
-
-impl ClientGame {
-    /// 判断是否需要 AI 走棋
-    pub fn should_ai_move(&self) -> bool {
-        matches!(self.mode, GameMode::LocalPvE { .. })
-            && self.is_ai_turn()
-            && !self.is_paused
-    }
-
-    /// 判断是否为本地模式
-    pub fn is_local(&self) -> bool {
-        matches!(self.mode, GameMode::LocalPvE { .. })
-    }
-}
-```
-
-### 2.3 AI 系统实现
-
-#### 文件结构
-
-```
-chess-client/src/game/
-├── mod.rs           # 游戏插件
-├── state.rs         # 游戏状态
-├── input.rs         # 输入处理
-├── ai.rs            # AI 系统（新增）⭐
-└── local_ai.rs      # 本地 AI 逻辑（新增）⭐
-```
-
-#### 核心代码
-
-```rust
-// chess-client/src/game/ai.rs
-use bevy::prelude::*;
-use bevy::tasks::{AsyncComputeTaskPool, Task};
-use chess_ai::AiEngine;
-use protocol::{BoardState, Move, Difficulty};
-
-/// AI 计算任务组件
-#[derive(Component)]
-pub struct AiComputeTask {
-    task: Task<Option<Move>>,
-    started_at: std::time::Instant,
-}
-
-/// AI 插件
-pub struct AiPlugin;
-
-impl Plugin for AiPlugin {
-    fn build(&self, app: &mut App) {
-        app.add_systems(Update, (
-            trigger_ai_compute,
-            poll_ai_result,
-        ).run_if(in_state(GameState::Playing)));
-    }
-}
-
-/// 触发 AI 计算
-fn trigger_ai_compute(
-    game: Res<ClientGame>,
-    mut commands: Commands,
-    existing_tasks: Query<&AiComputeTask>,
-) {
-    // 防止重复触发
-    if !existing_tasks.is_empty() {
-        return;
-    }
-
-    // 检查是否需要 AI 走棋
-    if !game.should_ai_move() {
-        return;
-    }
-
-    let game_state = game.board_state.clone();
-    let difficulty = match game.mode {
-        GameMode::LocalPvE { difficulty } => difficulty,
-        _ => return,
-    };
-
-    // 在后台线程池中计算（不阻塞渲染）
-    let task_pool = AsyncComputeTaskPool::get();
-    let task = task_pool.spawn(async move {
-        let mut engine = AiEngine::from_difficulty(difficulty);
-        engine.search(&game_state)
-    });
-
-    commands.spawn(AiComputeTask {
-        task,
-        started_at: std::time::Instant::now(),
-    });
-
-    tracing::info!("AI 开始思考... 难度: {:?}", difficulty);
-}
-
-/// 轮询 AI 结果
-fn poll_ai_result(
-    mut commands: Commands,
-    mut tasks: Query<(Entity, &mut AiComputeTask)>,
-    mut game: ResMut<ClientGame>,
-    mut game_events: EventWriter<GameEvent>,
-) {
-    use futures_lite::future::poll_once;
-
-    for (entity, mut task) in &mut tasks {
-        if let Some(ai_move) = block_on(poll_once(&mut task.task)) {
-            let elapsed = task.started_at.elapsed();
-
-            match ai_move {
-                Some(mv) => {
-                    tracing::info!("AI 走棋: {:?}, 耗时: {:?}", mv, elapsed);
-
-                    // 发送走棋事件（复用现有事件系统）
-                    game_events.send(GameEvent::MakeMove {
-                        from: mv.from,
-                        to: mv.to,
-                    });
-                }
-                None => {
-                    tracing::warn!("AI 无法找到合法走法，玩家胜利");
-                    // TODO: 触发游戏结束事件
-                }
-            }
-
-            // 清理任务
-            commands.entity(entity).despawn();
-        }
-    }
-}
-```
-
-### 2.4 UI 集成
-
-#### 菜单调整
-
-```rust
-// chess-client/src/ui/menu.rs
-
-/// 主菜单布局（调整后）
-///
-/// ┌─────────────────────────┐
-/// │    中国象棋              │
-/// ├─────────────────────────┤
-/// │  单机对战 ⭐（推荐）     │
-/// │    ├─ 简单              │
-/// │    ├─ 中等              │
-/// │    └─ 困难              │
-/// │                         │
-/// │  在线对战               │
-/// │    ├─ 快速匹配          │
-/// │    ├─ 创建房间          │
-/// │    └─ 加入房间          │
-/// │                         │
-/// │  其他                   │
-/// │    ├─ 加载游戏          │
-/// │    └─ 退出              │
-/// └─────────────────────────┘
-
-fn spawn_local_pve_buttons(
-    parent: &mut ChildBuilder,
-    theme: &ColorTheme,
-    asset_server: &AssetServer,
-) {
-    // "单机对战"标题
-    parent.spawn((
-        Text::new("单机对战 ⭐"),
-        TextFont {
-            font: asset_server.load("fonts/NotoSerifSC-Bold.ttf"),
-            font_size: 28.0,
-            ..default()
-        },
-        TextColor(theme.text_primary),
-    ));
-
-    // 难度按钮
-    for (label, difficulty) in [
-        ("简单", Difficulty::Easy),
-        ("中等", Difficulty::Medium),
-        ("困难", Difficulty::Hard),
-    ] {
-        spawn_menu_button(
-            parent,
-            label,
-            MenuAction::StartLocalPvE(difficulty),
-            theme,
-            asset_server,
-        );
-    }
-}
-
-// 处理菜单动作
-fn handle_menu_action(action: MenuAction) {
-    match action {
-        MenuAction::StartLocalPvE(difficulty) => {
-            // 直接进入游戏，无需网络
-            game.start_local_pve(difficulty);
-            next_state.set(GameState::Playing);
-        }
-        // ... 其他动作
-    }
-}
-```
-
-### 2.5 性能优化
-
-#### 使用 Bevy 任务系统
-
-```rust
-// 方案 1：使用 AsyncComputeTaskPool（推荐）
-let task = AsyncComputeTaskPool::get().spawn(async move {
-    // AI 计算在独立线程池中运行
-    let mut engine = AiEngine::from_difficulty(difficulty);
-    engine.search(&game_state)
-});
-
-// 方案 2：使用自定义线程池（备选）
-use rayon::prelude::*;
-
-lazy_static! {
-    static ref AI_THREAD_POOL: rayon::ThreadPool = {
-        rayon::ThreadPoolBuilder::new()
-            .num_threads(2)
-            .build()
-            .unwrap()
-    };
-}
-
-let result = AI_THREAD_POOL.install(|| {
-    let mut engine = AiEngine::from_difficulty(difficulty);
-    engine.search(&game_state)
-});
-```
-
-#### AI 思考指示器
-
-```rust
-// 显示"AI 思考中..."动画
-fn show_ai_thinking_indicator(
-    mut commands: Commands,
-    tasks: Query<&AiComputeTask>,
-    theme: Res<ColorTheme>,
-) {
-    if tasks.is_empty() {
-        return;
-    }
-
-    commands.spawn((
-        Text::new("AI 思考中..."),
-        TextFont {
-            font_size: 24.0,
-            ..default()
-        },
-        Node {
-            position_type: PositionType::Absolute,
-            top: Val::Px(50.0),
-            left: Val::Px(50.0),
-            ..default()
-        },
-        ThinkingIndicator,
-    ));
-}
-```
-
----
-
-## 三、实施计划
-
-### 3.1 Phase 1：基础功能（预计 2-3 天）
-
-**目标**：实现本地 AI 基础功能
-
-| 任务 | 工作量 | 文件 |
-|------|--------|------|
-| 添加 GameMode 枚举 | 1h | `game/state.rs` |
-| 实现 AI 插件 | 2h | `game/ai.rs` (新增) |
-| 集成 chess-ai 依赖 | 0.5h | `Cargo.toml` |
-| 调整菜单 UI | 2h | `ui/menu.rs` |
-| 基础测试 | 2h | 手动测试 |
-
-**验收标准**：
-- ✅ 可以从菜单启动本地 PvE
-- ✅ AI 能正确走棋
-- ✅ 游戏流程完整（走棋、吃子、将军、胜负）
-
-### 3.2 Phase 2：优化体验（预计 1-2 天）
-
-**目标**：提升用户体验
-
-| 任务 | 工作量 | 说明 |
-|------|--------|------|
-| AI 思考指示器 | 1h | 显示"思考中..."动画 |
-| 性能优化 | 2h | 确保不卡顿 |
-| 暂停/恢复支持 | 1h | 本地模式暂停 |
-| 悔棋支持 | 1h | 本地模式悔棋 |
-| 错误处理 | 1h | AI 失败提示 |
-
-**验收标准**：
-- ✅ AI 思考时有视觉反馈
-- ✅ 游戏流畅不卡顿
-- ✅ 支持暂停、悔棋
-- ✅ 异常情况有友好提示
-
-### 3.3 Phase 3：完善功能（预计 1-2 天，可选）
-
-**目标**：高级功能
-
-| 任务 | 工作量 | 说明 |
-|------|--------|------|
-| 保存/加载本地游戏 | 2h | 支持本地模式 |
-| AI 强度调节 | 1h | 运行时调整难度 |
-| 统计数据 | 2h | 胜率、用时等 |
-| AI 提示功能 | 2h | 显示 AI 推荐走法 |
-
----
-
-## 四、兼容性设计
-
-### 4.1 保留在线 PvE
-
-**原因**：
-1. 用于 AI 天梯排名（需要服务器验证防作弊）
-2. 跨设备同步进度
-3. 高级云端 AI
-
-**实现**：保持现有代码不变，作为备选模式
-
-### 4.2 统一接口
-
-```rust
-// 游戏逻辑层不关心 AI 来源
-pub trait AiProvider {
-    fn compute_move(&self, state: &BoardState) -> Option<Move>;
-}
-
-// 本地 AI
-struct LocalAi { engine: AiEngine }
-
-// 在线 AI
-struct RemoteAi { network: NetworkConnection }
-```
-
-### 4.3 渐进式迁移
-
-```
-阶段 1：本地 AI 实现
-  ↓
-阶段 2：默认使用本地，保留在线选项
-  ↓
-阶段 3：根据反馈决定是否移除在线 AI
-```
-
----
-
-## 五、风险评估
-
-### 5.1 技术风险
-
-| 风险 | 等级 | 缓解措施 |
-|------|------|----------|
-| 低端设备卡顿 | 🟡 中 | 调整搜索深度，优化算法 |
-| 内存占用过高 | 🟢 低 | 置换表大小可配置 |
-| 电量消耗 | 🟢 低 | 移动端降低搜索深度 |
-| 集成复杂度 | 🟢 低 | chess-ai 已经独立，易集成 |
-
-### 5.2 产品风险
-
-| 风险 | 等级 | 缓解措施 |
-|------|------|----------|
-| 作弊问题 | 🟢 低 | 单机模式无所谓，排名赛用在线 AI |
-| 版本不一致 | 🟢 低 | AI 版本号管理 |
-| 用户习惯改变 | 🟢 低 | 保留在线模式作为过渡 |
-
-### 5.3 运营风险
-
-| 风险 | 等级 | 影响 |
-|------|------|------|
-| 服务器负载降低 | ✅ 正面 | 成本大幅下降 |
-| 离线用户增加 | ✅ 正面 | 用户体验提升 |
-| 数据收集减少 | 🟡 中性 | 可保留可选上报 |
-
----
-
-## 六、性能对比
-
-### 6.1 延迟对比
-
-| 模式 | 网络延迟 | AI 计算 | 总延迟 |
-|------|---------|---------|--------|
-| **在线 AI** | 50-200ms | 1-5s | 1.05-5.2s |
-| **本地 AI** | 0ms | 1-5s | 1-5s ⬇️ |
-
-**提升**: 减少 50-200ms 网络延迟
-
-### 6.2 服务器负载对比
-
-假设 100 个并发 AI 对局：
-
-| 模式 | CPU 占用 | 内存占用 | 网络带宽 |
-|------|---------|---------|----------|
-| **在线 AI** | 100 个计算任务 | 6.4GB | 正常 |
-| **本地 AI** | 0 | 0 | 正常 |
-
-**节省**: 服务器 AI 算力 100%
-
-### 6.3 客户端性能
-
-| 设备等级 | FPS 影响 | 建议 |
-|---------|---------|------|
-| 高端设备 | 无影响 | 困难难度 |
-| 中端设备 | 轻微卡顿（<100ms） | 中等难度 |
-| 低端设备 | 偶尔卡顿（<500ms） | 简单难度 |
-
-**优化方案**: 根据设备性能自动推荐难度
-
----
-
-## 七、成本收益分析
-
-### 7.1 开发成本
-
-| 项目 | 工作量 | 说明 |
-|------|--------|------|
-| 核心开发 | 2-3 天 | 基础功能 |
-| 优化测试 | 1-2 天 | 体验优化 |
-| **总计** | **3-5 天** | 1 人完成 |
-
-### 7.2 运营收益
-
-**服务器成本节省**（月度）：
-
-假设：
-- 日均 1000 局 AI 对战
-- 服务器 CPU 成本：$0.05/核心时
-- 平均每局 20 步，每步 2 秒 = 40 秒 CPU
-- 月度 CPU 时间：1000 局/天 × 30 天 × 40 秒 = 1,200,000 秒 = 333 小时
-
-**节省成本**: $0.05 × 333 = **$16.65/月**
-
-**年度节省**: **$200**
-
-虽然绝对值不大，但：
-1. 服务器可以用更便宜的配置
-2. 可支持更多用户
-3. 用户体验提升带来的留存价值
-
----
-
-## 八、实施建议
-
-### 8.1 推荐方案
-
-**立即实施本地 AI**，理由：
-1. ✅ 开发成本低（3-5 天）
-2. ✅ 风险可控（不破坏现有功能）
-3. ✅ 收益明显（性能、体验、成本）
-4. ✅ 用户需求强（离线游戏）
-
-### 8.2 实施路径
-
-```
-第 1 天: Phase 1 基础功能
-  ├─ 上午: 实现 AI 系统
-  ├─ 下午: 集成菜单
-  └─ 晚上: 基础测试
-
-第 2 天: Phase 2 优化体验
-  ├─ 上午: 思考指示器 + 性能优化
-  ├─ 下午: 暂停/悔棋支持
-  └─ 晚上: 完整测试
-
-第 3-5 天: Phase 3 完善功能（可选）
-  └─ 保存加载、统计、AI 提示
-```
-
-### 8.3 回滚策略
-
-如果遇到问题：
-1. 保留在线 AI 作为备选
-2. 可以随时切换回在线模式
-3. 代码改动独立，易于回滚
-
----
-
-## 九、后续规划
-
-### 9.1 短期（1-2 周）
-
-- [ ] 实施本地 AI 基础功能
-- [ ] 收集用户反馈
-- [ ] 性能数据监控
-
-### 9.2 中期（1-2 月）
-
-- [ ] 根据反馈优化 AI 强度
-- [ ] 实现 AI 提示功能
-- [ ] 添加统计面板
-
-### 9.3 长期（3-6 月）
-
-- [ ] 评估是否移除在线 AI
-- [ ] 开发更强的 AI 算法
-- [ ] 支持自定义 AI 插件
-
----
-
-## 十、讨论议题
-
-### 待讨论的问题
-
-1. **优先级确认**
-   - 是否立即实施本地 AI？
-   - Phase 3 的高级功能是否需要？
-
-2. **功能取舍**
-   - 是否保留在线 AI？
-   - 是否需要 AI 天梯排名？
-
-3. **性能标准**
-   - 可接受的卡顿时间？
-   - 不同设备的难度建议？
-
-4. **实施时机**
-   - 在 Phase 4 完成后？
-   - 还是作为 Phase 5 的内容？
-
----
-
-## 附录
-
-### A. 相关文件清单
-
-**需要修改的文件**：
-- `chess-client/src/game/mod.rs`
-- `chess-client/src/game/state.rs`
-- `chess-client/src/ui/menu.rs`
-- `chess-client/Cargo.toml`
-
-**需要新增的文件**：
-- `chess-client/src/game/ai.rs`
-- `chess-client/src/game/local_ai.rs`
-
-**无需修改**：
-- 服务端所有代码（保留现有逻辑）
-- protocol 层（无需改动）
-
-### B. 依赖项
+### 2.3 依赖
 
 ```toml
-# chess-client/Cargo.toml
-[dependencies]
-chess-ai = { path = "../chess-ai" }  # 新增
-futures-lite = "2.0"                 # 新增（用于 poll_once）
+# chess-client/Cargo.toml（已存在）
+chess-ai = { path = "../chess-ai" }
 ```
 
-### C. 参考资料
-
-- Bevy 异步任务：https://docs.rs/bevy/latest/bevy/tasks/
-- chess-ai 文档：`../chess-ai/README.md`
-- 现有 AI 实现：`chess-server/src/server.rs:530-651`
+默认不启用 LLM。可选 feature `llm`（`chess-ai/llm`）走本机 Ollama 等复盘/分析路径，**不属于**本 LocalPvE 搜索主路径；许可说明见根目录 `THIRD_PARTY.md`。
 
 ---
 
-**文档结束**
+## 三、相对原提案的差异
+
+| 原提案说法 | 现状 |
+|------------|------|
+| 状态「待讨论」、讨论议题「是否立即实施」 | 主路径已合入；议题作废 |
+| 新增 `game/local_ai.rs` | 未拆文件，逻辑在 `game/ai.rs` |
+| 统一 `AiProvider` trait / 远程 AI 抽象 | **未做**；本地与在线仍分支处理 |
+| Phase 3：运行时改难度、统计面板、AI 提示 | **非目标**（未作为交付项） |
+| 运营成本美元测算、天梯防作弊长文 | **删除**；本仓为学习/沙盒玩具，不作运营口径 |
+
+在线 PvE（`OnlinePvE`）代码仍保留为备选，是否继续维护不在本文范围。
+
+---
+
+## 四、非目标（明确不做或未承诺）
+
+- Steam / 安装包 / 上架相关打包
+- 把服务端 AI 从代码库物理删除
+- 强制默认关闭在线 AI
+- 将 `llm` feature 捆绑进默认 LocalPvE
+- 跨设备云同步单机进度
+
+---
+
+## 五、相关路径速查
+
+**已实现（读这些即可）**
+
+- `chess-client/src/game/state.rs`
+- `chess-client/src/game/ai.rs`
+- `chess-client/src/game/mod.rs`
+- `chess-client/src/ui/menu.rs`
+- `chess-client/src/ui/game_ui.rs`
+- `chess-ai/`（引擎本体）
+
+**历史对照（服务端托管 AI，仍可能用于 OnlinePvE）**
+
+- `chess-server/src/server.rs`（AI 房间逻辑）
+
+**可选 LLM（独立）**
+
+- `chess-ai/src/llm/`
+- `chess-client` feature `llm`
+
+---
+
+## 六、维护约定
+
+- 改 LocalPvE 行为时优先改 §2 所列文件，并同步本节「已落地」表。
+- 勿把本文再改回「待讨论」；未做项写入「非目标」或另开短提案。
