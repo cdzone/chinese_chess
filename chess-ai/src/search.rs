@@ -1176,4 +1176,75 @@ mod tests {
         
         println!("排序后的走法数量: {}", moves.len());
     }
+
+    /// 慢速性能基准：深度 4/5 全搜，默认 CI 跳过；本地用
+    /// `cargo test -p chess-ai test_move_ordering_performance -- --ignored --nocapture`
+    #[test]
+    #[ignore = "slow move-ordering benchmark (depth 4/5)"]
+    fn test_move_ordering_performance() {
+        // 性能对比：验证走法排序后节点规模是否合理
+        let test_positions = [
+            ("初始局面", "rnbakabnr/9/1c5c1/p1p1p1p1p/9/9/P1P1P1P1P/1C5C1/9/RNBAKABNR w 0 1"),
+            ("中盘局面", "r1bakab1r/9/1cn4c1/p1p1p1p1p/9/2P6/P3P1P1P/1C2C1N2/9/RNBAKAB1R w 0 1"),
+        ];
+
+        println!("\n========================================");
+        println!("走法排序优化 - 性能测试");
+        println!("========================================\n");
+
+        for depth in [4, 5] {
+            println!("--- 深度 {} ---", depth);
+            let mut total_nodes = 0u64;
+
+            for (name, fen) in &test_positions {
+                let state = Fen::parse(fen).expect("FEN 解析失败");
+                let mut engine = AiEngine::new(AiConfig {
+                    difficulty: Difficulty::Custom { depth, time_limit_ms: 60000 },
+                    max_depth: depth,
+                    time_limit_ms: 60000,
+                    use_opening_book: false,
+                    tt_size_mb: 16,
+                });
+
+                let start = Instant::now();
+                let mv = engine.search(&state);
+                let elapsed = start.elapsed();
+                let nodes = engine.nodes_searched();
+
+                total_nodes += nodes;
+
+                println!(
+                    "{}: 节点={}, 耗时={:?}, 走法={:?}",
+                    name,
+                    nodes,
+                    elapsed,
+                    mv.map(|m| format!(
+                        "({},{})->({},{})",
+                        m.from.x, m.from.y, m.to.x, m.to.y
+                    ))
+                );
+            }
+
+            println!("深度{}合计: 总节点={}\n", depth, total_nodes);
+        }
+
+        let state = BoardState::initial();
+        let mut engine = AiEngine::new(AiConfig {
+            difficulty: Difficulty::Custom { depth: 5, time_limit_ms: 60000 },
+            max_depth: 5,
+            time_limit_ms: 60000,
+            use_opening_book: false,
+            tt_size_mb: 16,
+        });
+        let _ = engine.search(&state);
+        let nodes = engine.nodes_searched();
+
+        println!("深度5初始局面节点数: {}", nodes);
+        // 有良好走法排序的 Alpha-Beta：深度 5 约数百万节点量级
+        assert!(
+            nodes < 15_000_000,
+            "深度5节点数应小于1500万，实际: {}",
+            nodes
+        );
+    }
 }
