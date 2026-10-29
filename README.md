@@ -12,10 +12,10 @@
 ## 测试
 
 ```bash
-cargo test -p protocol -p chess-ai -p chess-server
+cargo test -p protocol -p chess-ai -p chess-server --lib
 ```
 
-走法排序等重性能测试若本地另加，请标 `#[ignore]`，不要放进 CI 必跑。
+只跑各 crate 的 lib 测；`examples/`（如过期 `test_analysis`）不进本闸。走法排序等重性能测试若本地另加，请标 `#[ignore]`，不要放进 CI 必跑。
 
 ## 运行
 
@@ -50,4 +50,4 @@ cargo check -p chess-client
 
 ## CI
 
-GitHub Actions：`cargo test`（protocol / chess-ai / chess-server）+ `cargo check -p chess-client`。不打包、不发服、不跑 Steam。
+GitHub Actions：`cargo test --lib`（protocol / chess-ai / chess-server）+ `cargo check -p chess-client`。不编 examples、不打包、不发服、不跑 Steam。

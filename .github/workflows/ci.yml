@@ -25,7 +25,7 @@ jobs:
             libwayland-dev libxkbcommon-dev
 
       - name: Test library / server crates
-        run: cargo test -p protocol -p chess-ai -p chess-server
+        run: cargo test -p protocol -p chess-ai -p chess-server --lib
 
       - name: Check client compiles
         run: cargo check -p chess-client
